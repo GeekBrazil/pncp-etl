@@ -1,0 +1,15 @@
+services:
+  pncp-control:
+    build: .
+    container_name: pncp-control
+    restart: unless-stopped
+    ports:
+      - "8790:8790"
+    volumes:
+      - .:/app
+    networks:
+      - core
+
+networks:
+  core:
+    external: true

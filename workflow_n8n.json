@@ -1,0 +1,58 @@
+{
+  "name": "ETL PNCP — Notificação Diária",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "30 6 * * *" }] }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Cron 06h30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT uf, inseridos, duplicados, erros, duracao_seg, status, executado_em FROM etl_log WHERE executado_em::date = CURRENT_DATE ORDER BY executado_em DESC LIMIT 1",
+        "additionalFields": {}
+      },
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Ler Log ETL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 300],
+      "credentials": { "postgres": { "id": "PREENCHER_CREDENCIAL_ID", "name": "PostgreSQL pncp_db" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first()?.json;\n\nif (!row || !row.uf) {\n  return [{ json: {\n    message: '⚠️ *ETL PNCP — sem execução hoje*\\nO cron pode ter falhado. Verificar /tmp/pncp-etl.log no servidor.'\n  }}];\n}\n\nconst status_emoji = row.status === 'ok' ? '✅' : row.status === 'parcial' ? '⚠️' : '❌';\nconst hora = new Date(row.executado_em).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});\n\nconst msg = [\n  `🏛️ *ETL PNCP — ${row.uf}* ${status_emoji}`,\n  `📅 ${new Date().toLocaleDateString('pt-BR')} às ${hora}`,\n  ``,\n  `📦 Inseridas: *${row.inseridos}* licitações`,\n  `🔁 Duplicadas: ${row.duplicados}`,\n  `⚠️ Erros: ${row.erros}`,\n  `⏱ Duração: ${row.duracao_seg}s`,\n  ``,\n  `🔗 Superset: http://192.168.1.9:3006`,\n].join('\\n');\n\nreturn [{ json: { message: msg } }];"
+      },
+      "id": "a1b2c3d4-0003-0003-0003-000000000003",
+      "name": "Montar Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "SEU_CHAT_ID_AQUI",
+        "text": "={{ $json.message }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Telegram — Resumo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [860, 300],
+      "credentials": { "telegramApi": { "id": "PREENCHER_CREDENCIAL_ID", "name": "Telegram Sofia" } }
+    }
+  ],
+  "connections": {
+    "Cron 06h30":     { "main": [[{ "node": "Ler Log ETL",      "type": "main", "index": 0 }]] },
+    "Ler Log ETL":    { "main": [[{ "node": "Montar Mensagem",  "type": "main", "index": 0 }]] },
+    "Montar Mensagem":{ "main": [[{ "node": "Telegram — Resumo","type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
