@@ -1,8 +1,6 @@
--- ETL PNCP — Schema PostgreSQL (porta 5433)
--- Executar: psql -h localhost -p 5433 -U postgres -f schema.sql
-
-CREATE DATABASE pncp_db;
-\c pncp_db;
+-- ETL PNCP — Schema PostgreSQL
+-- Executar contra o banco já criado (ex: pelo serviço Postgres do Coolify):
+--   psql "$DATABASE_URL" -f schema.sql
 
 -- Licitações brutas vindas do PNCP
 CREATE TABLE IF NOT EXISTS licitacoes (
@@ -77,3 +75,10 @@ FROM licitacoes
 WHERE data_encerramento >= NOW()::DATE
    OR data_encerramento IS NULL
 ORDER BY data_publicacao DESC;
+
+-- Progresso do backfill (12 meses) por modalidade — pra ser resumível se cair no meio.
+CREATE TABLE IF NOT EXISTS sync_progress (
+    modalidade_id         SMALLINT PRIMARY KEY,
+    ultima_data_concluida DATE,
+    atualizado_em         TIMESTAMPTZ DEFAULT NOW()
+);

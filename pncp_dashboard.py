@@ -2,7 +2,7 @@
 PNCP Control Dashboard — FastAPI + SSE + PDF
 Porta 8790
 """
-import asyncio, json, threading, time, io
+import asyncio, json, os, threading, time, io
 import queue as _queue
 from datetime import date, timedelta
 from typing import Optional
@@ -19,18 +19,28 @@ from reportlab.lib.enums import TA_CENTER
 
 app = FastAPI(title="PNCP Control")
 
-DB = dict(host="core-postgres", port=5432, dbname="pncp_db", user="allan", password="Alcachofra")
+# String de conexão via variável de ambiente — nunca hardcoded (era "core-postgres"/"allan/Alcachofra",
+# apontando pro servidor antigo que foi vendido).
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/pncp_db")
 UFS = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT",
        "PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"]
-MODALIDADES = {6:"Pregão Eletrônico",7:"Pregão Presencial",8:"Dispensa",
-               9:"Inexigibilidade",4:"Concorrência Eletrônica",5:"Concorrência Presencial",
-               12:"Credenciamento",3:"Concurso",1:"Leilão Eletrônico"}
+# Mesma lista completa do etl.py — antes estava incompleta aqui (só 9 das 19 modalidades reais do PNCP).
+MODALIDADES = {
+    1: "Leilão Eletrônico", 2: "Diálogo Competitivo", 3: "Concurso",
+    4: "Concorrência Eletrônica", 5: "Concorrência Presencial",
+    6: "Pregão Eletrônico", 7: "Pregão Presencial",
+    8: "Dispensa", 9: "Inexigibilidade", 10: "Manifestação de Interesse",
+    11: "Pré-qualificação", 12: "Credenciamento", 13: "Leilão Presencial",
+    14: "Inaplicabilidade", 15: "Chamada Pública",
+    16: "Concorrência Eletrônica Internacional", 17: "Concorrência Presencial Internacional",
+    18: "Pregão Eletrônico Internacional", 19: "Pregão Presencial Internacional",
+}
 
 _etl_queue: Optional[_queue.Queue] = None
 _etl_task: Optional[threading.Thread] = None
 
 def db():
-    return psycopg2.connect(**DB)
+    return psycopg2.connect(DATABASE_URL)
 
 def query(sql, params=None):
     conn = db()

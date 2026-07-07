@@ -2,9 +2,9 @@
 """
 ETL PNCP → PostgreSQL
 Uso: python3 etl.py [--uf RJ] [--dias 2] [--todas-ufs]
-Chamado pelo n8n via HTTP Request (modo server) ou Execute Command.
+     python3 etl.py --backfill --from 2025-07-08 --to 2026-07-07
 """
-import argparse, time, json, sys, re
+import argparse, os, time, json, sys, re
 from datetime import date, timedelta
 from collections import Counter
 import requests
@@ -12,13 +12,8 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 # ─── Config ──────────────────────────────────────────────────────────────────
-DB = {
-    "host":     "localhost",
-    "port":     5433,
-    "dbname":   "pncp_db",
-    "user":     "allan",
-    "password": "Alcachofra",
-}
+# String de conexão via variável de ambiente — nunca hardcoded (era "allan/Alcachofra" antes).
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/pncp_db")
 PNCP_BASE   = "https://pncp.gov.br/pncp-consulta/v1"
 PAGE_SIZE   = 50   # máx 50 por página
 MAX_PAGES   = 5    # máx 5 páginas por modalidade por execução
@@ -70,22 +65,34 @@ def fetch_page(uf: str, data_ini: str, data_fim: str, modalidade_id: int, pagina
     if uf:
         params["uf"] = uf
 
-    for tentativa in range(3):
+    delay = 1.5
+    for tentativa in range(6):
         try:
             r = session.get(
                 f"{PNCP_BASE}/contratacoes/publicacao",
                 params=params,
                 timeout=TIMEOUT_SEC,
             )
-            if r.status_code == 200:
-                return r.json()
-            if r.status_code in (404, 204):
-                return None
-            print(f"  ⚠ HTTP {r.status_code} modalidade={modalidade_id} pag={pagina}", file=sys.stderr)
-            return None
         except requests.RequestException as e:
-            print(f"  ⚠ tentativa {tentativa+1} falhou (mod={modalidade_id}): {e}", file=sys.stderr)
-            time.sleep(3 * tentativa + 1)
+            print(f"  ⚠ erro de rede (tentativa {tentativa+1}/6, mod={modalidade_id}): {e}", file=sys.stderr)
+            time.sleep(delay)
+            delay = min(delay * 2, 60)
+            continue
+
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code in (404, 204) or not r.content:
+            return None
+        if r.status_code == 429:
+            # PNCP tem rate limit agressivo — NÃO desistir aqui (bug antigo perdia dados silenciosamente).
+            print(f"  ⚠ rate limit 429 — aguardando {delay:.1f}s (tentativa {tentativa+1}/6, mod={modalidade_id})", file=sys.stderr)
+            time.sleep(delay)
+            delay = min(delay * 2, 60)
+            continue
+        print(f"  ⚠ HTTP {r.status_code} modalidade={modalidade_id} pag={pagina}", file=sys.stderr)
+        return None
+
+    print(f"  ✗ desistindo após 6 tentativas (mod={modalidade_id}, pag={pagina})", file=sys.stderr)
     return None
 
 # ─── Normalização ─────────────────────────────────────────────────────────────
@@ -144,7 +151,7 @@ def calcular_top_palavras(registros: list[dict], uf: str, mes_ref: str) -> list[
 
 # ─── Banco ────────────────────────────────────────────────────────────────────
 def get_conn():
-    return psycopg2.connect(**DB)
+    return psycopg2.connect(DATABASE_URL)
 
 def inserir_licitacoes(conn, registros: list[dict]) -> tuple[int, int]:
     if not registros:
@@ -267,6 +274,58 @@ def etl_uf(uf: str, data_ini: str, data_fim: str) -> dict:
     return resultado
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+def backfill(data_de: str, data_ate: str):
+    """Carga histórica nacional (uf=None, todas modalidades), dia a dia, resumível via sync_progress."""
+    de = date.fromisoformat(data_de)
+    ate = date.fromisoformat(data_ate)
+    conn = get_conn()
+
+    for mod_id, mod_nome in MODALIDADES.items():
+        with conn.cursor() as cur:
+            cur.execute("SELECT ultima_data_concluida FROM sync_progress WHERE modalidade_id = %s", (mod_id,))
+            row = cur.fetchone()
+        inicio = de
+        if row and row[0]:
+            inicio = row[0] + timedelta(days=1)
+            print(f"↻ Retomando {mod_nome} a partir de {inicio} (progresso salvo)")
+
+        if inicio > ate:
+            print(f"✓ {mod_nome} já concluído no intervalo pedido.")
+            continue
+
+        dia = inicio
+        while dia <= ate:
+            dia_str = str(dia)
+            print(f"[{mod_id:02d}] {mod_nome} — {dia_str}", end=" ", flush=True)
+            total_ins = 0
+            for pagina in range(1, 1000):  # sem o teto de 5 páginas do modo incremental — backfill precisa varrer tudo
+                data = fetch_page(None, dia_str, dia_str, mod_id, pagina)
+                if not data:
+                    break
+                items = data.get("data") or []
+                if not items:
+                    break
+                registros = [normalizar(l, "") for l in items]
+                ins, _ = inserir_licitacoes(conn, registros)
+                total_ins += ins
+                if pagina >= int(data.get("totalPaginas") or 1):
+                    break
+                time.sleep(0.3)
+            print(f"→ {total_ins} inseridos")
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO sync_progress (modalidade_id, ultima_data_concluida, atualizado_em)
+                       VALUES (%s, %s, NOW())
+                       ON CONFLICT (modalidade_id) DO UPDATE SET ultima_data_concluida = EXCLUDED.ultima_data_concluida, atualizado_em = NOW()""",
+                    (mod_id, dia),
+                )
+            conn.commit()
+            dia += timedelta(days=1)
+
+    conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="ETL PNCP → PostgreSQL")
     parser.add_argument("--uf",        default="RJ",  help="UF a processar (ex: RJ)")
@@ -274,7 +333,16 @@ def main():
     parser.add_argument("--todas-ufs", action="store_true", help="Processar todas as UFs")
     parser.add_argument("--data-ini",  help="Data inicial YYYY-MM-DD (override --dias)")
     parser.add_argument("--data-fim",  help="Data final YYYY-MM-DD (default: hoje)")
+    parser.add_argument("--backfill",  action="store_true", help="Carga histórica nacional, resumível")
+    parser.add_argument("--from", dest="backfill_de", help="Início do backfill YYYY-MM-DD")
+    parser.add_argument("--to", dest="backfill_ate", help="Fim do backfill YYYY-MM-DD")
     args = parser.parse_args()
+
+    if args.backfill:
+        if not args.backfill_de or not args.backfill_ate:
+            parser.error("--backfill exige --from e --to (YYYY-MM-DD)")
+        backfill(args.backfill_de, args.backfill_ate)
+        return
 
     data_fim = args.data_fim or str(date.today())
     data_ini = args.data_ini or str(date.today() - timedelta(days=args.dias))

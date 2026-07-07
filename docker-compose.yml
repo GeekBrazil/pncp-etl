@@ -5,11 +5,5 @@ services:
     restart: unless-stopped
     ports:
       - "8790:8790"
-    volumes:
-      - .:/app
-    networks:
-      - core
-
-networks:
-  core:
-    external: true
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
