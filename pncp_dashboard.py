@@ -840,6 +840,36 @@ async def empresas_enriquecer_stream():
                 await asyncio.sleep(0.2)
     return EventSourceResponse(generator())
 
+# ─── Imóveis da União ──────────────────────────────────────────────────────────
+@app.get("/imoveis-uniao")
+async def imoveis_uniao_lista(
+    municipio: str = None, uf: str = None, organizacao: str = None,
+    valor_min: float = None, valor_max: float = None, limit: int = 100,
+):
+    sql = "SELECT * FROM imoveis_uniao WHERE 1=1"
+    params = []
+    if municipio:
+        sql += " AND municipio ILIKE %s"; params.append(f"%{municipio}%")
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    if organizacao:
+        sql += " AND fonte_organizacao ILIKE %s"; params.append(f"%{organizacao}%")
+    if valor_min is not None:
+        sql += " AND valor_imovel >= %s"; params.append(valor_min)
+    if valor_max is not None:
+        sql += " AND valor_imovel <= %s"; params.append(valor_max)
+    sql += " ORDER BY valor_imovel DESC NULLS LAST LIMIT %s"; params.append(limit)
+    return query(sql, params)
+
+@app.get("/imoveis-uniao/stats")
+async def imoveis_uniao_stats():
+    geral = query("SELECT count(*) AS total, COALESCE(sum(valor_imovel),0) AS valor_total FROM imoveis_uniao")
+    por_org = query(
+        """SELECT fonte_organizacao, count(*) AS total, COALESCE(sum(valor_imovel),0) AS valor_total
+           FROM imoveis_uniao GROUP BY fonte_organizacao ORDER BY total DESC LIMIT 30"""
+    )
+    return {"total": geral[0]["total"], "valor_total": float(geral[0]["valor_total"]), "por_organizacao": por_org}
+
 # ─── PDF ──────────────────────────────────────────────────────────────────────
 @app.get("/pdf")
 async def gerar_pdf(uf: str = None, limite: int = 100):

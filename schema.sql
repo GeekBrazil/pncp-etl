@@ -110,3 +110,26 @@ CREATE TABLE IF NOT EXISTS socios (
     UNIQUE(cnpj, nome_socio, qualificacao)
 );
 CREATE INDEX IF NOT EXISTS idx_socios_nome ON socios(nome_socio);
+
+-- ── Imóveis da União (inventários patrimoniais via dados.gov.br) ───────────
+CREATE TABLE IF NOT EXISTS imoveis_uniao (
+    id                  SERIAL PRIMARY KEY,
+    fonte_dataset_id    TEXT,       -- id do conjunto de dados no dados.gov.br
+    fonte_organizacao   TEXT,       -- ex: universidade-federal-do-rio-grande-do-norte-ufrn
+    rip                 TEXT,       -- Registro Imobiliário Patrimonial (SPU), quando presente
+    nome_imovel         TEXT,
+    tipo_imovel         TEXT,
+    municipio           TEXT,
+    uf                  VARCHAR(2),
+    endereco            TEXT,
+    area_terreno        NUMERIC(15,2),
+    valor_terreno       NUMERIC(15,2),
+    area_construida     NUMERIC(15,2),
+    valor_imovel        NUMERIC(15,2),
+    forma_aquisicao     TEXT,
+    raw_row             JSONB,      -- linha original completa (schemas variam por órgão)
+    importado_em        TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(fonte_dataset_id, rip, nome_imovel)
+);
+CREATE INDEX IF NOT EXISTS idx_imoveis_uniao_municipio ON imoveis_uniao(municipio);
+CREATE INDEX IF NOT EXISTS idx_imoveis_uniao_org ON imoveis_uniao(fonte_organizacao);
