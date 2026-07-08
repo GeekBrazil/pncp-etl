@@ -82,3 +82,31 @@ CREATE TABLE IF NOT EXISTS sync_progress (
     ultima_data_concluida DATE,
     atualizado_em         TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── Enriquecimento de CNPJ (Receita Federal via BrasilAPI) ──────────────────
+CREATE TABLE IF NOT EXISTS empresas (
+    cnpj               TEXT PRIMARY KEY,
+    razao_social       TEXT,
+    nome_fantasia      TEXT,
+    situacao_cadastral TEXT,
+    data_situacao      DATE,
+    cnae_principal     TEXT,
+    cnae_descricao     TEXT,
+    uf                 VARCHAR(2),
+    municipio          TEXT,
+    capital_social     NUMERIC(15,2),
+    data_abertura      DATE,
+    raw_json           JSONB,
+    atualizado_em      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS socios (
+    id                     SERIAL PRIMARY KEY,
+    cnpj                   TEXT REFERENCES empresas(cnpj) ON DELETE CASCADE,
+    nome_socio             TEXT,
+    qualificacao           TEXT,
+    data_entrada_sociedade DATE,
+    faixa_etaria           TEXT,
+    UNIQUE(cnpj, nome_socio, qualificacao)
+);
+CREATE INDEX IF NOT EXISTS idx_socios_nome ON socios(nome_socio);

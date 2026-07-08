@@ -273,6 +273,11 @@ tr:hover td{background:rgba(99,102,241,.05)}
         <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
         <div id="log-box"></div>
       </div>
+
+      <div class="row-btns" style="margin-top:.6rem">
+        <button class="btn btn-primary" id="btn-enrich" onclick="runEnrich()">🏢 Enriquecer CNPJs pendentes</button>
+      </div>
+      <div id="enrich-log-box" style="max-height:140px;overflow-y:auto;font-size:.68rem;margin-top:.3rem"></div>
     </div>
 
     <div>
@@ -516,6 +521,30 @@ function renderTable(rows) {
     </tr>`).join('');
 }
 
+let enrichEvtSource = null;
+async function runEnrich() {
+  document.getElementById('btn-enrich').disabled = true;
+  const log = document.getElementById('enrich-log-box');
+  log.innerHTML = '';
+
+  await fetch('/empresas/enriquecer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  });
+
+  if (enrichEvtSource) enrichEvtSource.close();
+  enrichEvtSource = new EventSource('/empresas/enriquecer/stream');
+  enrichEvtSource.onmessage = e => {
+    log.innerHTML += `<div>${e.data}</div>`;
+    log.scrollTop = log.scrollHeight;
+    if (e.data.startsWith('DONE')) {
+      enrichEvtSource.close(); enrichEvtSource = null;
+      document.getElementById('btn-enrich').disabled = false;
+    }
+  };
+}
+
 async function loadHist() {
   const r = await fetch('/etl/status');
   const rows = await r.json();
@@ -722,6 +751,94 @@ async def etl_stop():
     if _etl_queue:
         _etl_queue.put("DONE Parado")
     return {"ok": True}
+
+# ─── Enriquecimento de CNPJ (Receita Federal via BrasilAPI) ───────────────────
+_enrich_queue: Optional[_queue.Queue] = None
+_enrich_task: Optional[threading.Thread] = None
+
+@app.get("/empresas/{cnpj}")
+async def empresa_detalhe(cnpj: str):
+    empresas = query("SELECT * FROM empresas WHERE cnpj = %s", (cnpj,))
+    if not empresas:
+        return {"encontrado": False}
+    socios_rows = query("SELECT nome_socio, qualificacao, data_entrada_sociedade, faixa_etaria FROM socios WHERE cnpj = %s", (cnpj,))
+    return {"encontrado": True, "empresa": empresas[0], "socios": socios_rows}
+
+@app.get("/empresas")
+async def empresas_busca(nome_socio: str = None, limit: int = 50):
+    if nome_socio:
+        rows = query(
+            """SELECT DISTINCT e.cnpj, e.razao_social, e.municipio, e.uf, s.nome_socio, s.qualificacao
+               FROM socios s JOIN empresas e ON e.cnpj = s.cnpj
+               WHERE s.nome_socio ILIKE %s
+               LIMIT %s""",
+            (f"%{nome_socio}%", limit),
+        )
+        return rows
+    return query("SELECT cnpj, razao_social, situacao_cadastral, municipio, uf FROM empresas ORDER BY atualizado_em DESC LIMIT %s", (limit,))
+
+@app.post("/empresas/enriquecer")
+async def empresas_enriquecer(request: Request):
+    global _enrich_task, _enrich_queue
+    body = await request.json() if await request.body() else {}
+    _enrich_queue = _queue.Queue()
+    _enrich_task = threading.Thread(target=_run_enrich_thread, args=(_enrich_queue, body.get("limite")), daemon=True)
+    _enrich_task.start()
+    return {"ok": True}
+
+def _run_enrich_thread(q: _queue.Queue, limite: Optional[int]):
+    import sys
+    sys.path.insert(0, "/app")
+    from cnpj_enrich import buscar_cnpj, salvar_empresa, get_conn
+
+    conn = get_conn()
+    with conn.cursor() as cur:
+        sql = """SELECT DISTINCT orgao_cnpj FROM licitacoes
+                 WHERE orgao_cnpj IS NOT NULL AND orgao_cnpj != ''
+                   AND orgao_cnpj NOT IN (SELECT cnpj FROM empresas)"""
+        if limite:
+            sql += f" LIMIT {int(limite)}"
+        cur.execute(sql)
+        pendentes = [row[0] for row in cur.fetchall()]
+
+    q.put(f"[INFO] {len(pendentes)} CNPJ(s) pendente(s)")
+    ok = erros = 0
+    for i, cnpj in enumerate(pendentes, 1):
+        dados = buscar_cnpj(cnpj)
+        if dados:
+            try:
+                salvar_empresa(conn, dados)
+                ok += 1
+                q.put(f"[{i}/{len(pendentes)}] {cnpj} → {dados.get('razao_social', '?')}")
+            except Exception as e:
+                erros += 1
+                conn.rollback()
+                q.put(f"[{i}/{len(pendentes)}] {cnpj} → erro ao salvar: {e}")
+        else:
+            erros += 1
+            q.put(f"[{i}/{len(pendentes)}] {cnpj} → não encontrado")
+        import time as _time
+        _time.sleep(0.4)
+
+    conn.close()
+    q.put(f"DONE Concluído: {ok} ok, {erros} erros de {len(pendentes)} pendentes.")
+
+@app.get("/empresas/enriquecer/stream")
+async def empresas_enriquecer_stream():
+    async def generator():
+        global _enrich_queue
+        if not _enrich_queue:
+            yield {"data": "Nenhum enriquecimento em execução"}
+            return
+        while True:
+            try:
+                msg = _enrich_queue.get_nowait()
+                yield {"data": msg}
+                if msg.startswith("DONE"):
+                    break
+            except _queue.Empty:
+                await asyncio.sleep(0.2)
+    return EventSourceResponse(generator())
 
 # ─── PDF ──────────────────────────────────────────────────────────────────────
 @app.get("/pdf")
