@@ -953,7 +953,8 @@ async def municipio_detalhe(ibge: str):
         FROM licitacoes WHERE municipio_ibge = %s
     """, (ibge,))
     top_lic = query("""
-        SELECT orgao_nome, objeto, valor_estimado, modalidade_nome, data_publicacao
+        SELECT pncp_id, orgao_nome, orgao_cnpj, objeto, valor_estimado,
+               modalidade_nome, situacao, data_publicacao, data_encerramento, url_pncp
         FROM licitacoes
         WHERE municipio_ibge = %s AND valor_estimado <= 500000000
         ORDER BY valor_estimado DESC LIMIT 5
