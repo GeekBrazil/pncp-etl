@@ -7,7 +7,7 @@ import queue as _queue
 from datetime import date, timedelta
 from typing import Optional
 import psycopg2, psycopg2.extras
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from reportlab.lib.pagesizes import A4
@@ -907,6 +907,46 @@ async def score_municipios_lista(
         sql += " AND receita_per_capita <= %s"; params.append(per_capita_max)
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
+
+@app.get("/municipios")
+async def municipios_busca(q: str = None, uf: str = None, limit: int = 20):
+    """Busca de municípios (nome parcial) sobre score_municipios — usada pela
+    busca pública do allancandido.com/insights."""
+    sql = """SELECT municipio_ibge, municipio_nome, uf, populacao, receita_per_capita
+             FROM score_municipios WHERE 1=1"""
+    params = []
+    if q:
+        sql += " AND municipio_nome ILIKE %s"; params.append(f"%{q}%")
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    sql += " ORDER BY populacao DESC NULLS LAST LIMIT %s"; params.append(min(limit, 100))
+    return query(sql, params)
+
+@app.get("/municipios/{ibge}")
+async def municipio_detalhe(ibge: str):
+    """Visão combinada de um município (por código IBGE): saúde fiscal
+    (score_municipios) + licitações agregadas — alimenta as páginas
+    programáticas /insights/[municipio] do site público."""
+    score = query("SELECT * FROM score_municipios WHERE municipio_ibge = %s ORDER BY exercicio DESC, periodo DESC LIMIT 1", (ibge,))
+    lic = query("""
+        SELECT COUNT(*) AS total,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
+               COUNT(*) FILTER (WHERE data_encerramento >= CURRENT_DATE) AS abertas
+        FROM licitacoes WHERE municipio_ibge = %s
+    """, (ibge,))
+    top_lic = query("""
+        SELECT orgao_nome, objeto, valor_estimado, modalidade_nome, data_publicacao
+        FROM licitacoes
+        WHERE municipio_ibge = %s AND valor_estimado <= 500000000
+        ORDER BY valor_estimado DESC LIMIT 5
+    """, (ibge,))
+    if not score and (not lic or not lic[0]["total"]):
+        raise HTTPException(status_code=404, detail="Município sem dados")
+    return {
+        "score": score[0] if score else None,
+        "licitacoes": lic[0] if lic else None,
+        "top_licitacoes": top_lic,
+    }
 
 @app.get("/score-municipios/stats")
 async def score_municipios_stats():
