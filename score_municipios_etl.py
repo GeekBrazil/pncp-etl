@@ -27,7 +27,10 @@ def listar_municipios() -> list[dict]:
     r.raise_for_status()
     out = []
     for m in r.json():
-        uf = m["microrregiao"]["mesorregiao"]["UF"]["sigla"]
+        micro = m.get("microrregiao") or {}
+        uf = ((micro.get("mesorregiao") or {}).get("UF") or {}).get("sigla")
+        if not uf:
+            uf = (((m.get("regiao-imediata") or {}).get("regiao-intermediaria") or {}).get("UF") or {}).get("sigla")
         out.append({"ibge": str(m["id"]), "nome": m["nome"], "uf": uf})
     return out
 
