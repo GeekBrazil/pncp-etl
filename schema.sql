@@ -133,3 +133,26 @@ CREATE TABLE IF NOT EXISTS imoveis_uniao (
 );
 CREATE INDEX IF NOT EXISTS idx_imoveis_uniao_municipio ON imoveis_uniao(municipio);
 CREATE INDEX IF NOT EXISTS idx_imoveis_uniao_org ON imoveis_uniao(fonte_organizacao);
+
+-- ── Score Territorial (IBGE + SICONFI: receita per capita por município) ───
+CREATE TABLE IF NOT EXISTS score_municipios (
+    municipio_ibge      TEXT,
+    municipio_nome      TEXT,
+    uf                  VARCHAR(2),
+    exercicio           SMALLINT,
+    periodo             SMALLINT,
+    populacao           BIGINT,
+    receita_realizada   NUMERIC(18,2),
+    receita_per_capita  NUMERIC(15,4),
+    raw_json            JSONB,
+    atualizado_em       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (municipio_ibge, exercicio, periodo)
+);
+CREATE INDEX IF NOT EXISTS idx_score_uf ON score_municipios(uf);
+CREATE INDEX IF NOT EXISTS idx_score_percapita ON score_municipios(receita_per_capita);
+
+CREATE TABLE IF NOT EXISTS score_progress (
+    id            SMALLINT PRIMARY KEY DEFAULT 1,
+    ultimo_ibge   TEXT,
+    atualizado_em TIMESTAMPTZ DEFAULT NOW()
+);

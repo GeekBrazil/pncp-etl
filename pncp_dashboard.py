@@ -870,6 +870,49 @@ async def imoveis_uniao_stats():
     )
     return {"total": geral[0]["total"], "valor_total": float(geral[0]["valor_total"]), "por_organizacao": por_org}
 
+@app.get("/alertas/alto-valor-dispensa")
+async def alertas_alto_valor_dispensa(valor_min: float = 100000, uf: str = None, limit: int = 200):
+    """Contratações via Dispensa (8) ou Inexigibilidade (9) acima de um valor —
+    sinal clássico de transparência: valores altos deveriam, em geral, passar
+    por disputa aberta (pregão/concorrência), não por dispensa/inexigibilidade."""
+    sql = """SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
+                     valor_estimado, modalidade_nome, data_publicacao, url_pncp
+              FROM licitacoes
+              WHERE modalidade_id IN (8, 9) AND valor_estimado >= %s"""
+    params = [valor_min]
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    sql += " ORDER BY valor_estimado DESC LIMIT %s"; params.append(limit)
+    return query(sql, params)
+
+@app.get("/score-municipios")
+async def score_municipios_lista(
+    uf: str = None, municipio: str = None,
+    per_capita_min: float = None, per_capita_max: float = None,
+    limit: int = 100,
+):
+    sql = "SELECT * FROM score_municipios WHERE 1=1"
+    params = []
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    if municipio:
+        sql += " AND municipio_nome ILIKE %s"; params.append(f"%{municipio}%")
+    if per_capita_min is not None:
+        sql += " AND receita_per_capita >= %s"; params.append(per_capita_min)
+    if per_capita_max is not None:
+        sql += " AND receita_per_capita <= %s"; params.append(per_capita_max)
+    sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
+    return query(sql, params)
+
+@app.get("/score-municipios/stats")
+async def score_municipios_stats():
+    geral = query("SELECT count(*) AS total, COALESCE(avg(receita_per_capita),0) AS media_percapita FROM score_municipios")
+    por_uf = query(
+        """SELECT uf, count(*) AS total, COALESCE(avg(receita_per_capita),0) AS media_percapita
+           FROM score_municipios GROUP BY uf ORDER BY media_percapita DESC"""
+    )
+    return {"total": geral[0]["total"], "media_percapita": float(geral[0]["media_percapita"]), "por_uf": por_uf}
+
 # ─── PDF ──────────────────────────────────────────────────────────────────────
 @app.get("/pdf")
 async def gerar_pdf(uf: str = None, limite: int = 100):
