@@ -639,9 +639,11 @@ async def dashboard(): return HTML
 
 @app.get("/kpis")
 async def kpis():
+    # valor_estimado > 500mi é quase sempre erro de digitação na fonte (PNCP) —
+    # ex: sentinela 9999999999999.99 — exclui só da SOMA pra não distorcer o KPI.
     rows = query("""
         SELECT COUNT(*) AS total,
-               SUM(valor_estimado) AS valor,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
                COUNT(DISTINCT uf) AS estados,
                COUNT(*) FILTER (WHERE data_encerramento >= CURRENT_DATE) AS abertas
         FROM licitacoes
@@ -871,15 +873,17 @@ async def imoveis_uniao_stats():
     return {"total": geral[0]["total"], "valor_total": float(geral[0]["valor_total"]), "por_organizacao": por_org}
 
 @app.get("/alertas/alto-valor-dispensa")
-async def alertas_alto_valor_dispensa(valor_min: float = 100000, uf: str = None, limit: int = 200):
+async def alertas_alto_valor_dispensa(valor_min: float = 100000, valor_max: float = 500000000, uf: str = None, limit: int = 200):
     """Contratações via Dispensa (8) ou Inexigibilidade (9) acima de um valor —
     sinal clássico de transparência: valores altos deveriam, em geral, passar
-    por disputa aberta (pregão/concorrência), não por dispensa/inexigibilidade."""
+    por disputa aberta (pregão/concorrência), não por dispensa/inexigibilidade.
+    valor_max evita expor erros de digitação da fonte (PNCP) como se fossem reais —
+    passe um valor bem alto explicitamente se quiser inspecionar os outliers brutos."""
     sql = """SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
                      valor_estimado, modalidade_nome, data_publicacao, url_pncp
               FROM licitacoes
-              WHERE modalidade_id IN (8, 9) AND valor_estimado >= %s"""
-    params = [valor_min]
+              WHERE modalidade_id IN (8, 9) AND valor_estimado >= %s AND valor_estimado <= %s"""
+    params = [valor_min, valor_max]
     if uf:
         sql += " AND uf = %s"; params.append(uf)
     sql += " ORDER BY valor_estimado DESC LIMIT %s"; params.append(limit)
