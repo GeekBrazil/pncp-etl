@@ -908,6 +908,24 @@ async def score_municipios_lista(
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
+@app.get("/stats/gerais")
+async def stats_gerais():
+    """Contadores agregados de todos os pilares numa chamada só — alimenta a
+    seção 'prova por dados' da home do allancandido.com."""
+    lic = query("""SELECT COUNT(*) AS total,
+                          SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor
+                   FROM licitacoes""")[0]
+    imoveis = query("SELECT COUNT(*) AS total FROM imoveis_uniao")[0]
+    municipios = query("SELECT COUNT(*) AS total FROM score_municipios")[0]
+    empresas = query("SELECT COUNT(*) AS total FROM empresas")[0]
+    return {
+        "licitacoes": lic["total"],
+        "licitacoes_valor": float(lic["valor"] or 0),
+        "imoveis_uniao": imoveis["total"],
+        "municipios": municipios["total"],
+        "empresas": empresas["total"],
+    }
+
 @app.get("/municipios")
 async def municipios_busca(q: str = None, uf: str = None, limit: int = 20):
     """Busca de municípios (nome parcial) sobre score_municipios — usada pela
