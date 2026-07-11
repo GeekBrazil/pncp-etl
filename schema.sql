@@ -156,3 +156,22 @@ CREATE TABLE IF NOT EXISTS score_progress (
     ultimo_ibge   TEXT,
     atualizado_em TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── Radar de Loteamentos (crescimento populacional + fiscal + infra) ────────
+-- Materializado pelo radar_loteamento_etl.py; leitura direta pelo dashboard.
+CREATE TABLE IF NOT EXISTS radar_loteamento (
+    municipio_ibge      TEXT PRIMARY KEY,
+    municipio_nome      TEXT,
+    uf                  VARCHAR(2),
+    pop_inicial         BIGINT,      -- estimativa IBGE ano inicial
+    pop_final           BIGINT,      -- estimativa IBGE ano final
+    ano_inicial         SMALLINT,
+    ano_final           SMALLINT,
+    crescimento_pct     NUMERIC(8,3),   -- variação % no período
+    receita_per_capita  NUMERIC(15,4),  -- de score_municipios
+    infra_valor_12m     NUMERIC(18,2),  -- licitações de infraestrutura no período coletado
+    score               NUMERIC(8,3),   -- 0-100, fórmula documentada no ETL
+    atualizado_em       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_radar_uf ON radar_loteamento(uf);
+CREATE INDEX IF NOT EXISTS idx_radar_score ON radar_loteamento(score);

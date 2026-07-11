@@ -908,6 +908,44 @@ async def score_municipios_lista(
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
+# Objetos de leilão que são imóveis (e não veículos/sucata/máquinas)
+LEILAO_IMOVEL_REGEX = r"imóve|imove|terreno|gleba|casa|apartamento|sala comercial|galpão|fazenda|sítio|chácara|prédio|edifício|área urbana|área rural"
+
+@app.get("/leiloes-imoveis")
+async def leiloes_imoveis(uf: str = None, abertos: bool = True, limit: int = 50):
+    """Leilões públicos (modalidades 1 e 13 do PNCP) cujo objeto é imóvel/terreno —
+    oportunidade clássica pra investidor de leilão, direto da fonte oficial."""
+    sql = """SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
+                     valor_estimado, modalidade_nome, situacao,
+                     data_publicacao, data_encerramento, url_pncp
+              FROM licitacoes
+              WHERE modalidade_id IN (1, 13)
+                AND valor_estimado <= 500000000
+                AND objeto ~* %s"""
+    params: list = [LEILAO_IMOVEL_REGEX]
+    if abertos:
+        sql += " AND data_encerramento >= CURRENT_DATE"
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    sql += " ORDER BY data_encerramento ASC NULLS LAST, valor_estimado DESC LIMIT %s"
+    params.append(min(limit, 200))
+    return query(sql, params)
+
+@app.get("/radar-loteamentos")
+async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
+    """Ranking de municípios pra prospecção de loteamento (tabela materializada
+    pelo radar_loteamento_etl.py)."""
+    sql = "SELECT * FROM radar_loteamento WHERE score IS NOT NULL"
+    params: list = []
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    if pop_min is not None:
+        sql += " AND pop_final >= %s"; params.append(pop_min)
+    if pop_max is not None:
+        sql += " AND pop_final <= %s"; params.append(pop_max)
+    sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 200))
+    return query(sql, params)
+
 @app.get("/stats/gerais")
 async def stats_gerais():
     """Contadores agregados de todos os pilares numa chamada só — alimenta a
