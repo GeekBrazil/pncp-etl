@@ -1008,7 +1008,8 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
         sql += " AND pop_final >= %s"; params.append(pop_min)
     if pop_max is not None:
         sql += " AND pop_final <= %s"; params.append(pop_max)
-    sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 200))
+    # cap 1000: mapa de calor por UF precisa de todos os municípios (SP=645)
+    sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
 @app.get("/stats/gerais")
