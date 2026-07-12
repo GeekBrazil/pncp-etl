@@ -175,3 +175,7 @@ CREATE TABLE IF NOT EXISTS radar_loteamento (
 );
 CREATE INDEX IF NOT EXISTS idx_radar_uf ON radar_loteamento(uf);
 CREATE INDEX IF NOT EXISTS idx_radar_score ON radar_loteamento(score);
+
+-- ── Busca por palavra-chave no objeto (ferramenta Mercado Público) ─────────
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_lic_objeto_trgm ON licitacoes USING gin (objeto gin_trgm_ops);

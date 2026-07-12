@@ -908,6 +908,71 @@ async def score_municipios_lista(
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
+# ─── Ferramentas públicas (allancandido.com/ferramentas) ─────────────────────
+import re as _re
+from cnpj_enrich import buscar_cnpj as _buscar_cnpj_api, salvar_empresa as _salvar_empresa
+
+@app.get("/cnpj/{cnpj}")
+async def consulta_cnpj(cnpj: str):
+    """Consulta de CNPJ cache-first: banco próprio → BrasilAPI (e salva no
+    cache, engordando a base a cada consulta de usuário)."""
+    digitos = _re.sub(r"\D", "", cnpj)
+    if len(digitos) != 14:
+        raise HTTPException(status_code=400, detail="CNPJ deve ter 14 dígitos")
+
+    empresa = query("SELECT * FROM empresas WHERE cnpj = %s", (digitos,))
+    if not empresa:
+        dados = _buscar_cnpj_api(digitos)
+        if not dados:
+            raise HTTPException(status_code=404, detail="CNPJ não encontrado")
+        conn = db()
+        try:
+            _salvar_empresa(conn, dados)
+            conn.commit()
+        finally:
+            conn.close()
+        empresa = query("SELECT * FROM empresas WHERE cnpj = %s", (digitos,))
+    socios = query("SELECT nome_socio, qualificacao, data_entrada_sociedade FROM socios WHERE cnpj = %s ORDER BY nome_socio", (digitos,))
+    e = dict(empresa[0]); e.pop("raw_json", None)
+    return {"empresa": e, "socios": socios}
+
+@app.get("/mercado-publico")
+async def mercado_publico(q: str, uf: str = None):
+    """Quanto o governo compra de <termo>? Estatísticas + maiores compradores +
+    oportunidades abertas, sobre a base completa de licitações (índice trigram)."""
+    q = (q or "").strip()
+    if len(q) < 3:
+        raise HTTPException(status_code=400, detail="Termo deve ter pelo menos 3 caracteres")
+    padrao = f"%{q}%"
+    filtro_uf, params_uf = ("", []) if not uf else (" AND uf = %s", [uf])
+
+    stats = query(f"""
+        SELECT COUNT(*) AS total,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
+               COUNT(*) FILTER (WHERE data_encerramento >= CURRENT_DATE) AS abertas,
+               COUNT(DISTINCT municipio_ibge) AS municipios
+        FROM licitacoes WHERE objeto ILIKE %s{filtro_uf}
+    """, [padrao, *params_uf])[0]
+
+    top_orgaos = query(f"""
+        SELECT orgao_nome, uf, COUNT(*) AS total,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor
+        FROM licitacoes WHERE objeto ILIKE %s{filtro_uf}
+        GROUP BY orgao_nome, uf ORDER BY valor DESC NULLS LAST LIMIT 5
+    """, [padrao, *params_uf])
+
+    abertas = query(f"""
+        SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
+               valor_estimado, modalidade_nome, situacao,
+               data_publicacao, data_encerramento, url_pncp
+        FROM licitacoes
+        WHERE objeto ILIKE %s{filtro_uf}
+          AND data_encerramento >= CURRENT_DATE AND valor_estimado <= 500000000
+        ORDER BY data_encerramento ASC LIMIT 8
+    """, [padrao, *params_uf])
+
+    return {"stats": stats, "top_orgaos": top_orgaos, "abertas": abertas}
+
 # Objetos de leilão que são imóveis (e não veículos/sucata/máquinas)
 LEILAO_IMOVEL_REGEX = r"imóve|imove|terreno|gleba|casa|apartamento|sala comercial|galpão|fazenda|sítio|chácara|prédio|edifício|área urbana|área rural"
 
