@@ -1064,10 +1064,12 @@ async def municipio_detalhe(ibge: str):
     """, (ibge,))
     if not score and (not lic or not lic[0]["total"]):
         raise HTTPException(status_code=404, detail="Município sem dados")
+    radar = query("SELECT pop_inicial, pop_final, ano_inicial, ano_final, crescimento_pct, infra_valor_12m, score AS radar_score FROM radar_loteamento WHERE municipio_ibge = %s", (ibge,))
     return {
         "score": score[0] if score else None,
         "licitacoes": lic[0] if lic else None,
         "top_licitacoes": top_lic,
+        "radar": radar[0] if radar else None,
     }
 
 @app.get("/score-municipios/stats")
