@@ -179,3 +179,27 @@ CREATE INDEX IF NOT EXISTS idx_radar_score ON radar_loteamento(score);
 -- ── Busca por palavra-chave no objeto (ferramenta Mercado Público) ─────────
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_lic_objeto_trgm ON licitacoes USING gin (objeto gin_trgm_ops);
+
+-- ── Comércio exterior por município (Comex Stat / MDIC) ─────────────────────
+CREATE TABLE IF NOT EXISTS comex_municipios (
+    municipio_nome  TEXT,
+    uf              VARCHAR(2),
+    fluxo           VARCHAR(6),     -- 'export' | 'import'
+    ano             SMALLINT,
+    fob_usd         NUMERIC(18,2),
+    atualizado_em   TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (municipio_nome, uf, fluxo, ano)
+);
+CREATE INDEX IF NOT EXISTS idx_comex_uf ON comex_municipios(uf);
+
+-- ── Termos em alta nas compras públicas (radar de conteúdo) ─────────────────
+-- Materializado pelo trends_etl.py: freq/valor recente vs período anterior.
+CREATE TABLE IF NOT EXISTS trends_termos (
+    termo           TEXT PRIMARY KEY,
+    freq_recente    INT,
+    freq_anterior   INT,
+    valor_recente   NUMERIC(18,2),
+    variacao_pct    NUMERIC(8,2),   -- crescimento % recente vs anterior
+    abertas         INT,            -- oportunidades abertas com o termo
+    atualizado_em   TIMESTAMPTZ DEFAULT NOW()
+);

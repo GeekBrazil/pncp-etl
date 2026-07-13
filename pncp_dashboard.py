@@ -1012,6 +1012,36 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
+@app.get("/trends")
+async def trends(limit: int = 20):
+    """Termos em alta nas compras públicas — ordenados por variação % (radar de
+    conteúdo). Materializado por trends_etl.py."""
+    return query("""
+        SELECT termo, freq_recente, freq_anterior, valor_recente, variacao_pct, abertas
+        FROM trends_termos
+        WHERE freq_recente > 0
+        ORDER BY variacao_pct DESC, freq_recente DESC
+        LIMIT %s
+    """, (min(limit, 60),))
+
+@app.get("/comex/municipios")
+async def comex_municipios(uf: str = None, fluxo: str = "export", limit: int = 30):
+    fluxo = "import" if fluxo == "import" else "export"
+    sql = "SELECT municipio_nome, uf, fob_usd, ano FROM comex_municipios WHERE fluxo = %s"
+    params: list = [fluxo]
+    if uf:
+        sql += " AND uf = %s"; params.append(uf.upper())
+    sql += " ORDER BY fob_usd DESC LIMIT %s"; params.append(min(limit, 200))
+    return query(sql, params)
+
+@app.get("/comex/por-uf")
+async def comex_por_uf(fluxo: str = "export"):
+    fluxo = "import" if fluxo == "import" else "export"
+    return query("""
+        SELECT uf, SUM(fob_usd) AS fob FROM comex_municipios
+        WHERE fluxo = %s GROUP BY uf ORDER BY fob DESC
+    """, (fluxo,))
+
 @app.get("/dashboard-live")
 async def dashboard_live(uf: str = None):
     """Agregado do HUD numa chamada só, opcionalmente filtrado por UF.
@@ -1053,16 +1083,33 @@ async def dashboard_live(uf: str = None):
     """, puf)
 
     por_uf = query("""
-        SELECT uf, COUNT(*) AS total,
-               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
-               COUNT(*) FILTER (WHERE modalidade_id IN (1,13)
-                   AND objeto ~* '""" + LEILAO_IMOVEL_REGEX + """'
-                   AND data_encerramento >= CURRENT_DATE) AS leiloes_abertos
-        FROM licitacoes WHERE uf IS NOT NULL AND uf != '' GROUP BY uf
+        SELECT l.uf, COUNT(*) AS total,
+               SUM(l.valor_estimado) FILTER (WHERE l.valor_estimado <= 500000000) AS valor,
+               COUNT(*) FILTER (WHERE l.modalidade_id IN (1,13)
+                   AND l.objeto ~* '""" + LEILAO_IMOVEL_REGEX + """'
+                   AND l.data_encerramento >= CURRENT_DATE) AS leiloes_abertos,
+               COALESCE(c.fob, 0) AS comex_export
+        FROM licitacoes l
+        LEFT JOIN (SELECT uf, SUM(fob_usd) AS fob FROM comex_municipios
+                   WHERE fluxo='export' GROUP BY uf) c ON c.uf = l.uf
+        WHERE l.uf IS NOT NULL AND l.uf != ''
+        GROUP BY l.uf, c.fob
     """)
 
+    termos_alta = query("""
+        SELECT termo, freq_recente, variacao_pct, abertas
+        FROM trends_termos WHERE freq_recente > 0
+        ORDER BY variacao_pct DESC, freq_recente DESC LIMIT 15
+    """)
+
+    comex = query(f"""
+        SELECT municipio_nome, uf, fob_usd FROM comex_municipios
+        WHERE fluxo='export'{fuf} ORDER BY fob_usd DESC LIMIT 12
+    """, puf)
+
     return {"uf": uf, "kpis": kpis, "leiloes": leiloes,
-            "crescimento": crescimento, "alertas": alertas, "por_uf": por_uf}
+            "crescimento": crescimento, "alertas": alertas, "por_uf": por_uf,
+            "trends": termos_alta, "comex": comex}
 
 @app.get("/stats/gerais")
 async def stats_gerais():
