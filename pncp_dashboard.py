@@ -1012,6 +1012,58 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
+@app.get("/dashboard-live")
+async def dashboard_live(uf: str = None):
+    """Agregado do HUD numa chamada só, opcionalmente filtrado por UF.
+    Público — sem auth. Alimenta o painel full-width do site."""
+    uf = (uf or "").strip().upper() or None
+    fuf, puf = ("", []) if not uf else (" AND uf = %s", [uf])
+
+    kpis = query(f"""
+        SELECT COUNT(*) AS licitacoes,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
+               COUNT(*) FILTER (WHERE data_encerramento >= CURRENT_DATE) AS abertas,
+               COUNT(DISTINCT municipio_ibge) AS municipios
+        FROM licitacoes WHERE 1=1{fuf}
+    """, puf)[0]
+
+    leiloes = query(f"""
+        SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
+               valor_estimado, modalidade_nome, situacao, data_publicacao, data_encerramento, url_pncp
+        FROM licitacoes
+        WHERE modalidade_id IN (1,13) AND valor_estimado <= 500000000
+          AND objeto ~* %s AND data_encerramento >= CURRENT_DATE{fuf}
+        ORDER BY data_encerramento ASC LIMIT 12
+    """, [LEILAO_IMOVEL_REGEX, *puf])
+
+    crescimento = query(f"""
+        SELECT municipio_ibge, municipio_nome, uf, pop_final, crescimento_pct,
+               receita_per_capita, infra_valor_12m, score
+        FROM radar_loteamento
+        WHERE score IS NOT NULL AND pop_final >= 5000{fuf}
+        ORDER BY score DESC LIMIT 12
+    """, puf)
+
+    alertas = query(f"""
+        SELECT pncp_id, orgao_nome, municipio_nome, uf, objeto, valor_estimado,
+               modalidade_nome, data_publicacao, url_pncp
+        FROM licitacoes
+        WHERE modalidade_id IN (8,9) AND valor_estimado BETWEEN 100000 AND 500000000{fuf}
+        ORDER BY valor_estimado DESC LIMIT 10
+    """, puf)
+
+    por_uf = query("""
+        SELECT uf, COUNT(*) AS total,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor,
+               COUNT(*) FILTER (WHERE modalidade_id IN (1,13)
+                   AND objeto ~* '""" + LEILAO_IMOVEL_REGEX + """'
+                   AND data_encerramento >= CURRENT_DATE) AS leiloes_abertos
+        FROM licitacoes WHERE uf IS NOT NULL AND uf != '' GROUP BY uf
+    """)
+
+    return {"uf": uf, "kpis": kpis, "leiloes": leiloes,
+            "crescimento": crescimento, "alertas": alertas, "por_uf": por_uf}
+
 @app.get("/stats/gerais")
 async def stats_gerais():
     """Contadores agregados de todos os pilares numa chamada só — alimenta a
