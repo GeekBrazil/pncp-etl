@@ -177,6 +177,9 @@ def importar_tudo():
 
             linhas_dataset = 0
             with conn.cursor() as cur:
+                # idempotência: apaga as linhas deste dataset antes de reinserir
+                # (o UNIQUE não protege quando rip/nome_imovel são NULL — NULL≠NULL)
+                cur.execute("DELETE FROM imoveis_uniao WHERE fonte_dataset_id = %s", (ds["id"],))
                 for recurso in csvs:
                     rows = baixar_csv(recurso["link"])
                     if not rows:
