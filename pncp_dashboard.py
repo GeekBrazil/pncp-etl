@@ -1012,6 +1012,25 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
+@app.get("/concessoes")
+async def concessoes(uf: str = None, abertas: bool = True, limit: int = 60):
+    """Leilões de concessão pública (saneamento, iluminação, transporte, etc.) —
+    objeto contém 'concessão'. Teto de R$ 100 bi (concessão de bilhões é
+    legítima; acima disso é erro de digitação da fonte)."""
+    sql = """SELECT pncp_id, orgao_nome, orgao_cnpj, municipio_nome, uf, objeto,
+                     valor_estimado, modalidade_nome, situacao,
+                     data_publicacao, data_encerramento, url_pncp
+              FROM licitacoes
+              WHERE objeto ILIKE '%concess%' AND valor_estimado <= 1e11"""
+    params: list = []
+    if abertas:
+        sql += " AND data_encerramento >= CURRENT_DATE"
+    if uf:
+        sql += " AND uf = %s"; params.append(uf.upper())
+    sql += " ORDER BY data_encerramento ASC NULLS LAST, valor_estimado DESC LIMIT %s"
+    params.append(min(limit, 200))
+    return query(sql, params)
+
 @app.get("/trends")
 async def trends(limit: int = 20):
     """Termos em alta nas compras públicas — ordenados por variação % (radar de
