@@ -1021,8 +1021,8 @@ async def concessoes(uf: str = None, abertas: bool = True, limit: int = 60):
                      valor_estimado, modalidade_nome, situacao,
                      data_publicacao, data_encerramento, url_pncp
               FROM licitacoes
-              WHERE objeto ILIKE '%concess%' AND valor_estimado <= 1e11"""
-    params: list = []
+              WHERE objeto ILIKE %s AND valor_estimado <= 1e11"""
+    params: list = ["%concess%"]
     if abertas:
         sql += " AND data_encerramento >= CURRENT_DATE"
     if uf:
