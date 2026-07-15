@@ -192,6 +192,16 @@ CREATE TABLE IF NOT EXISTS comex_municipios (
 );
 CREATE INDEX IF NOT EXISTS idx_comex_uf ON comex_municipios(uf);
 
+-- ── Perfil rural por município (IBGE Censo Agropecuário 2017) ───────────────
+CREATE TABLE IF NOT EXISTS agro_municipios (
+    municipio_ibge   TEXT PRIMARY KEY,
+    municipio_nome   TEXT,
+    uf               VARCHAR(2),
+    estabelecimentos INT,           -- nº de estabelecimentos agropecuários
+    atualizado_em    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_agro_uf ON agro_municipios(uf);
+
 -- ── Termos em alta nas compras públicas (radar de conteúdo) ─────────────────
 -- Materializado pelo trends_etl.py: freq/valor recente vs período anterior.
 CREATE TABLE IF NOT EXISTS trends_termos (

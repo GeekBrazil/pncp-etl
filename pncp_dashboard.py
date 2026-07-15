@@ -1012,6 +1012,16 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
+@app.get("/agro/municipios")
+async def agro_municipios(uf: str = None, limit: int = 50):
+    """Perfil rural (nº de estabelecimentos agropecuários, Censo Agro/IBGE)."""
+    sql = "SELECT municipio_ibge, municipio_nome, uf, estabelecimentos FROM agro_municipios WHERE estabelecimentos IS NOT NULL"
+    params: list = []
+    if uf:
+        sql += " AND uf = %s"; params.append(uf.upper())
+    sql += " ORDER BY estabelecimentos DESC LIMIT %s"; params.append(min(limit, 500))
+    return query(sql, params)
+
 @app.get("/concessoes")
 async def concessoes(uf: str = None, abertas: bool = True, limit: int = 60):
     """Leilões de concessão pública (saneamento, iluminação, transporte, etc.) —
@@ -1184,11 +1194,13 @@ async def municipio_detalhe(ibge: str):
     if not score and (not lic or not lic[0]["total"]):
         raise HTTPException(status_code=404, detail="Município sem dados")
     radar = query("SELECT pop_inicial, pop_final, ano_inicial, ano_final, crescimento_pct, infra_valor_12m, score AS radar_score FROM radar_loteamento WHERE municipio_ibge = %s", (ibge,))
+    agro = query("SELECT estabelecimentos FROM agro_municipios WHERE municipio_ibge = %s", (ibge,))
     return {
         "score": score[0] if score else None,
         "licitacoes": lic[0] if lic else None,
         "top_licitacoes": top_lic,
         "radar": radar[0] if radar else None,
+        "agro": agro[0] if agro else None,
     }
 
 @app.get("/score-municipios/stats")
