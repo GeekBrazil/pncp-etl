@@ -213,3 +213,37 @@ CREATE TABLE IF NOT EXISTS trends_termos (
     abertas         INT,            -- oportunidades abertas com o termo
     atualizado_em   TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── Sanções (Portal da Transparência: CEIS, CNEP, CEPIM) ──────────────────────
+-- Empresas/pessoas impedidas de licitar/contratar. Base do cruzamento
+-- investigativo (fornecedor sancionado) e da consulta de risco no site.
+CREATE TABLE IF NOT EXISTS sancoes (
+    id                BIGINT PRIMARY KEY,     -- id do registro na Transparência
+    cadastro          VARCHAR(10),            -- CEIS | CNEP | CEPIM
+    cnpj              VARCHAR(14),            -- só dígitos (casa com empresas.cnpj); NULL se pessoa física
+    cpf               VARCHAR(20),            -- mascarado pela fonte quando PF
+    nome              TEXT,
+    tipo_pessoa       TEXT,
+    tipo_sancao       TEXT,
+    orgao_sancionador TEXT,
+    fonte             TEXT,                   -- nomeExibicao da fonte da sanção
+    data_inicio       DATE,
+    data_fim          DATE,
+    data_publicacao   DATE,
+    fundamentacao     TEXT,
+    link_publicacao   TEXT,
+    processo          TEXT,
+    importado_em      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sancoes_cnpj     ON sancoes(cnpj);
+CREATE INDEX IF NOT EXISTS idx_sancoes_cadastro ON sancoes(cadastro);
+CREATE INDEX IF NOT EXISTS idx_sancoes_fim      ON sancoes(data_fim);
+
+-- Progresso resumível da carga (uma linha por cadastro)
+CREATE TABLE IF NOT EXISTS sancoes_progress (
+    cadastro       VARCHAR(10) PRIMARY KEY,
+    ultima_pagina  INT DEFAULT 0,
+    concluido      BOOLEAN DEFAULT FALSE,
+    total_gravado  INT DEFAULT 0,
+    atualizado_em  TIMESTAMPTZ DEFAULT NOW()
+);

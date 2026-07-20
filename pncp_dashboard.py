@@ -7,8 +7,9 @@ import queue as _queue
 from datetime import date, timedelta
 from typing import Optional
 import psycopg2, psycopg2.extras
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials, APIKeyHeader
 from sse_starlette.sse import EventSourceResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -18,6 +19,41 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
 app = FastAPI(title="PNCP Control")
+
+# Variáveis de ambiente para segurança
+PNCP_API_KEY = os.environ.get("PNCP_API_KEY", "dev_key")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev_secret")
+
+# Autenticações
+security_basic = HTTPBasic(auto_error=False)
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_admin(credentials: Optional[HTTPBasicCredentials] = Depends(security_basic)):
+    expected_username = "allan"
+    expected_password = ADMIN_SECRET
+    if not credentials or credentials.username != expected_username or credentials.password != expected_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Não autorizado",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+def verify_api_key_or_admin(
+    api_key: Optional[str] = Depends(api_key_header),
+    credentials: Optional[HTTPBasicCredentials] = Depends(security_basic)
+):
+    if api_key and api_key == PNCP_API_KEY:
+        return
+    if credentials:
+        expected_username = "allan"
+        expected_password = ADMIN_SECRET
+        if credentials.username == expected_username and credentials.password == expected_password:
+            return
+    raise HTTPException(
+        status_code=401,
+        detail="Acesso não autorizado. Forneça uma API Key válida ou credenciais de administrador.",
+        headers={"WWW-Authenticate": "Basic"},
+    )
 
 # String de conexão via variável de ambiente — nunca hardcoded (era "core-postgres"/"allan/Alcachofra",
 # apontando pro servidor antigo que foi vendido).
@@ -634,10 +670,10 @@ function gerarPDF() {
 </html>"""
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(verify_admin)])
 async def dashboard(): return HTML
 
-@app.get("/kpis")
+@app.get("/kpis", dependencies=[Depends(verify_api_key_or_admin)])
 async def kpis():
     # valor_estimado > 500mi é quase sempre erro de digitação na fonte (PNCP) —
     # ex: sentinela 9999999999999.99 — exclui só da SOMA pra não distorcer o KPI.
@@ -650,7 +686,7 @@ async def kpis():
     """)
     return rows[0] if rows else {}
 
-@app.get("/dados")
+@app.get("/dados", dependencies=[Depends(verify_api_key_or_admin)])
 async def dados(limit: int = 5000, uf: str = None, modalidade: int = None):
     sql = "SELECT * FROM licitacoes WHERE 1=1"
     params = []
@@ -659,12 +695,12 @@ async def dados(limit: int = 5000, uf: str = None, modalidade: int = None):
     sql += " ORDER BY valor_estimado DESC LIMIT %s"; params.append(limit)
     return query(sql, params)
 
-@app.get("/etl/status")
+@app.get("/etl/status", dependencies=[Depends(verify_admin)])
 async def etl_status():
     return query("SELECT * FROM etl_log ORDER BY id DESC LIMIT 20")
 
 # ─── ETL assíncrono com SSE (thread-safe via queue.Queue) ─────────────────────
-@app.post("/etl/run")
+@app.post("/etl/run", dependencies=[Depends(verify_admin)])
 async def etl_run(request: Request):
     global _etl_task, _etl_queue
     body = await request.json()
@@ -730,7 +766,7 @@ def _run_etl_thread(q: _queue.Queue, params: dict):
 
     q.put("DONE Concluído")
 
-@app.get("/etl/stream")
+@app.get("/etl/stream", dependencies=[Depends(verify_admin)])
 async def etl_stream():
     async def generator():
         global _etl_queue
@@ -747,7 +783,7 @@ async def etl_stream():
                 await asyncio.sleep(0.2)
     return EventSourceResponse(generator())
 
-@app.post("/etl/stop")
+@app.post("/etl/stop", dependencies=[Depends(verify_admin)])
 async def etl_stop():
     global _etl_queue
     if _etl_queue:
@@ -758,7 +794,7 @@ async def etl_stop():
 _enrich_queue: Optional[_queue.Queue] = None
 _enrich_task: Optional[threading.Thread] = None
 
-@app.get("/empresas/{cnpj}")
+@app.get("/empresas/{cnpj}", dependencies=[Depends(verify_api_key_or_admin)])
 async def empresa_detalhe(cnpj: str):
     empresas = query("SELECT * FROM empresas WHERE cnpj = %s", (cnpj,))
     if not empresas:
@@ -766,7 +802,7 @@ async def empresa_detalhe(cnpj: str):
     socios_rows = query("SELECT nome_socio, qualificacao, data_entrada_sociedade, faixa_etaria FROM socios WHERE cnpj = %s", (cnpj,))
     return {"encontrado": True, "empresa": empresas[0], "socios": socios_rows}
 
-@app.get("/empresas")
+@app.get("/empresas", dependencies=[Depends(verify_api_key_or_admin)])
 async def empresas_busca(nome_socio: str = None, limit: int = 50):
     if nome_socio:
         rows = query(
@@ -779,7 +815,7 @@ async def empresas_busca(nome_socio: str = None, limit: int = 50):
         return rows
     return query("SELECT cnpj, razao_social, situacao_cadastral, municipio, uf FROM empresas ORDER BY atualizado_em DESC LIMIT %s", (limit,))
 
-@app.post("/empresas/enriquecer")
+@app.post("/empresas/enriquecer", dependencies=[Depends(verify_admin)])
 async def empresas_enriquecer(request: Request):
     global _enrich_task, _enrich_queue
     body = await request.json() if await request.body() else {}
@@ -825,7 +861,7 @@ def _run_enrich_thread(q: _queue.Queue, limite: Optional[int]):
     conn.close()
     q.put(f"DONE Concluído: {ok} ok, {erros} erros de {len(pendentes)} pendentes.")
 
-@app.get("/empresas/enriquecer/stream")
+@app.get("/empresas/enriquecer/stream", dependencies=[Depends(verify_admin)])
 async def empresas_enriquecer_stream():
     async def generator():
         global _enrich_queue
@@ -843,7 +879,7 @@ async def empresas_enriquecer_stream():
     return EventSourceResponse(generator())
 
 # ─── Imóveis da União ──────────────────────────────────────────────────────────
-@app.get("/imoveis-uniao")
+@app.get("/imoveis-uniao", dependencies=[Depends(verify_api_key_or_admin)])
 async def imoveis_uniao_lista(
     municipio: str = None, uf: str = None, organizacao: str = None,
     valor_min: float = None, valor_max: float = None, limit: int = 100,
@@ -863,7 +899,7 @@ async def imoveis_uniao_lista(
     sql += " ORDER BY valor_imovel DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
-@app.get("/imoveis-uniao/stats")
+@app.get("/imoveis-uniao/stats", dependencies=[Depends(verify_api_key_or_admin)])
 async def imoveis_uniao_stats():
     geral = query("SELECT count(*) AS total, COALESCE(sum(valor_imovel),0) AS valor_total FROM imoveis_uniao")
     por_org = query(
@@ -872,7 +908,7 @@ async def imoveis_uniao_stats():
     )
     return {"total": geral[0]["total"], "valor_total": float(geral[0]["valor_total"]), "por_organizacao": por_org}
 
-@app.get("/alertas/alto-valor-dispensa")
+@app.get("/alertas/alto-valor-dispensa", dependencies=[Depends(verify_api_key_or_admin)])
 async def alertas_alto_valor_dispensa(valor_min: float = 100000, valor_max: float = 500000000, uf: str = None, limit: int = 200):
     """Contratações via Dispensa (8) ou Inexigibilidade (9) acima de um valor —
     sinal clássico de transparência: valores altos deveriam, em geral, passar
@@ -889,7 +925,7 @@ async def alertas_alto_valor_dispensa(valor_min: float = 100000, valor_max: floa
     sql += " ORDER BY valor_estimado DESC LIMIT %s"; params.append(limit)
     return query(sql, params)
 
-@app.get("/score-municipios")
+@app.get("/score-municipios", dependencies=[Depends(verify_api_key_or_admin)])
 async def score_municipios_lista(
     uf: str = None, municipio: str = None,
     per_capita_min: float = None, per_capita_max: float = None,
@@ -912,7 +948,7 @@ async def score_municipios_lista(
 import re as _re
 from cnpj_enrich import buscar_cnpj as _buscar_cnpj_api, salvar_empresa as _salvar_empresa
 
-@app.get("/cnpj/{cnpj}")
+@app.get("/cnpj/{cnpj}", dependencies=[Depends(verify_api_key_or_admin)])
 async def consulta_cnpj(cnpj: str):
     """Consulta de CNPJ cache-first: banco próprio → BrasilAPI (e salva no
     cache, engordando a base a cada consulta de usuário)."""
@@ -934,9 +970,44 @@ async def consulta_cnpj(cnpj: str):
         empresa = query("SELECT * FROM empresas WHERE cnpj = %s", (digitos,))
     socios = query("SELECT nome_socio, qualificacao, data_entrada_sociedade FROM socios WHERE cnpj = %s ORDER BY nome_socio", (digitos,))
     e = dict(empresa[0]); e.pop("raw_json", None)
-    return {"empresa": e, "socios": socios}
+    # cruzamento investigativo: a empresa está sancionada? (CEIS/CNEP/CEPIM)
+    sancoes = query(
+        """SELECT cadastro, tipo_sancao, orgao_sancionador, fonte, data_inicio, data_fim, link_publicacao
+           FROM sancoes WHERE cnpj = %s ORDER BY data_fim DESC NULLS LAST""",
+        (digitos,))
+    ativas = [s for s in sancoes if not s["data_fim"] or str(s["data_fim"]) >= date.today().isoformat()]
+    return {"empresa": e, "socios": socios,
+            "sancoes": sancoes,
+            "sancionada": len(ativas) > 0,
+            "sancoes_ativas": len(ativas)}
 
-@app.get("/mercado-publico")
+@app.get("/sancoes/stats", dependencies=[Depends(verify_api_key_or_admin)])
+async def sancoes_stats():
+    """Números da base de sanções (CEIS/CNEP/CEPIM) pra prova/contadores."""
+    por_cad = query("SELECT cadastro, count(*) AS total FROM sancoes GROUP BY cadastro ORDER BY 1")
+    tot = query("""SELECT count(*) AS total,
+                          count(*) FILTER (WHERE cnpj IS NOT NULL) AS empresas,
+                          count(*) FILTER (WHERE data_fim IS NULL OR data_fim >= CURRENT_DATE) AS vigentes
+                   FROM sancoes""")[0]
+    return {"por_cadastro": por_cad, **tot}
+
+@app.get("/sancoes/por-cnpj/{cnpj}", dependencies=[Depends(verify_api_key_or_admin)])
+async def sancoes_por_cnpj(cnpj: str):
+    """Consulta de risco: uma empresa está sancionada? Retorna sanções + flag ativa."""
+    digitos = _re.sub(r"\D", "", cnpj)
+    if len(digitos) != 14:
+        raise HTTPException(status_code=400, detail="CNPJ deve ter 14 dígitos")
+    sancoes = query(
+        """SELECT cadastro, nome, tipo_sancao, orgao_sancionador, fonte,
+                  data_inicio, data_fim, link_publicacao
+           FROM sancoes WHERE cnpj = %s ORDER BY data_fim DESC NULLS LAST""",
+        (digitos,))
+    hoje = date.today().isoformat()
+    ativas = [s for s in sancoes if not s["data_fim"] or str(s["data_fim"]) >= hoje]
+    return {"cnpj": digitos, "sancionada": len(ativas) > 0,
+            "sancoes_ativas": len(ativas), "sancoes": sancoes}
+
+@app.get("/mercado-publico", dependencies=[Depends(verify_api_key_or_admin)])
 async def mercado_publico(q: str, uf: str = None):
     """Quanto o governo compra de <termo>? Estatísticas + maiores compradores +
     oportunidades abertas, sobre a base completa de licitações (índice trigram)."""
@@ -976,7 +1047,7 @@ async def mercado_publico(q: str, uf: str = None):
 # Objetos de leilão que são imóveis (e não veículos/sucata/máquinas)
 LEILAO_IMOVEL_REGEX = r"imóve|imove|terreno|gleba|casa|apartamento|sala comercial|galpão|fazenda|sítio|chácara|prédio|edifício|área urbana|área rural"
 
-@app.get("/leiloes-imoveis")
+@app.get("/leiloes-imoveis", dependencies=[Depends(verify_api_key_or_admin)])
 async def leiloes_imoveis(uf: str = None, abertos: bool = True, limit: int = 50):
     """Leilões públicos (modalidades 1 e 13 do PNCP) cujo objeto é imóvel/terreno —
     oportunidade clássica pra investidor de leilão, direto da fonte oficial."""
@@ -996,7 +1067,7 @@ async def leiloes_imoveis(uf: str = None, abertos: bool = True, limit: int = 50)
     params.append(min(limit, 200))
     return query(sql, params)
 
-@app.get("/radar-loteamentos")
+@app.get("/radar-loteamentos", dependencies=[Depends(verify_api_key_or_admin)])
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
     pelo radar_loteamento_etl.py)."""
@@ -1012,7 +1083,7 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
-@app.get("/agro/municipios")
+@app.get("/agro/municipios", dependencies=[Depends(verify_api_key_or_admin)])
 async def agro_municipios(uf: str = None, limit: int = 50):
     """Perfil rural (nº de estabelecimentos agropecuários, Censo Agro/IBGE)."""
     sql = "SELECT municipio_ibge, municipio_nome, uf, estabelecimentos FROM agro_municipios WHERE estabelecimentos IS NOT NULL"
@@ -1022,7 +1093,7 @@ async def agro_municipios(uf: str = None, limit: int = 50):
     sql += " ORDER BY estabelecimentos DESC LIMIT %s"; params.append(min(limit, 500))
     return query(sql, params)
 
-@app.get("/concessoes")
+@app.get("/concessoes", dependencies=[Depends(verify_api_key_or_admin)])
 async def concessoes(uf: str = None, abertas: bool = True, limit: int = 60):
     """Leilões de concessão pública (saneamento, iluminação, transporte, etc.) —
     objeto contém 'concessão'. Teto de R$ 100 bi (concessão de bilhões é
@@ -1041,7 +1112,7 @@ async def concessoes(uf: str = None, abertas: bool = True, limit: int = 60):
     params.append(min(limit, 200))
     return query(sql, params)
 
-@app.get("/trends")
+@app.get("/trends", dependencies=[Depends(verify_api_key_or_admin)])
 async def trends(limit: int = 20):
     """Termos em alta nas compras públicas — ordenados por variação % (radar de
     conteúdo). Materializado por trends_etl.py."""
@@ -1053,7 +1124,7 @@ async def trends(limit: int = 20):
         LIMIT %s
     """, (min(limit, 60),))
 
-@app.get("/comex/municipios")
+@app.get("/comex/municipios", dependencies=[Depends(verify_api_key_or_admin)])
 async def comex_municipios(uf: str = None, fluxo: str = "export", limit: int = 30):
     fluxo = "import" if fluxo == "import" else "export"
     sql = "SELECT municipio_nome, uf, fob_usd, ano FROM comex_municipios WHERE fluxo = %s"
@@ -1063,7 +1134,7 @@ async def comex_municipios(uf: str = None, fluxo: str = "export", limit: int = 3
     sql += " ORDER BY fob_usd DESC LIMIT %s"; params.append(min(limit, 200))
     return query(sql, params)
 
-@app.get("/comex/por-uf")
+@app.get("/comex/por-uf", dependencies=[Depends(verify_api_key_or_admin)])
 async def comex_por_uf(fluxo: str = "export"):
     fluxo = "import" if fluxo == "import" else "export"
     return query("""
@@ -1071,7 +1142,7 @@ async def comex_por_uf(fluxo: str = "export"):
         WHERE fluxo = %s GROUP BY uf ORDER BY fob DESC
     """, (fluxo,))
 
-@app.get("/dashboard-live")
+@app.get("/dashboard-live", dependencies=[Depends(verify_api_key_or_admin)])
 async def dashboard_live(uf: str = None):
     """Agregado do HUD numa chamada só, opcionalmente filtrado por UF.
     Público — sem auth. Alimenta o painel full-width do site."""
@@ -1140,7 +1211,7 @@ async def dashboard_live(uf: str = None):
             "crescimento": crescimento, "alertas": alertas, "por_uf": por_uf,
             "trends": termos_alta, "comex": comex}
 
-@app.get("/stats/gerais")
+@app.get("/stats/gerais", dependencies=[Depends(verify_api_key_or_admin)])
 async def stats_gerais():
     """Contadores agregados de todos os pilares numa chamada só — alimenta a
     seção 'prova por dados' da home do allancandido.com."""
@@ -1158,7 +1229,7 @@ async def stats_gerais():
         "empresas": empresas["total"],
     }
 
-@app.get("/municipios")
+@app.get("/municipios", dependencies=[Depends(verify_api_key_or_admin)])
 async def municipios_busca(q: str = None, uf: str = None, limit: int = 20):
     """Busca de municípios (nome parcial) sobre score_municipios — usada pela
     busca pública do allancandido.com/insights."""
@@ -1172,7 +1243,7 @@ async def municipios_busca(q: str = None, uf: str = None, limit: int = 20):
     sql += " ORDER BY populacao DESC NULLS LAST LIMIT %s"; params.append(min(limit, 100))
     return query(sql, params)
 
-@app.get("/municipios/{ibge}")
+@app.get("/municipios/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
 async def municipio_detalhe(ibge: str):
     """Visão combinada de um município (por código IBGE): saúde fiscal
     (score_municipios) + licitações agregadas — alimenta as páginas
@@ -1203,7 +1274,7 @@ async def municipio_detalhe(ibge: str):
         "agro": agro[0] if agro else None,
     }
 
-@app.get("/score-municipios/stats")
+@app.get("/score-municipios/stats", dependencies=[Depends(verify_api_key_or_admin)])
 async def score_municipios_stats():
     geral = query("SELECT count(*) AS total, COALESCE(avg(receita_per_capita),0) AS media_percapita FROM score_municipios")
     por_uf = query(
@@ -1213,7 +1284,7 @@ async def score_municipios_stats():
     return {"total": geral[0]["total"], "media_percapita": float(geral[0]["media_percapita"]), "por_uf": por_uf}
 
 # ─── PDF ──────────────────────────────────────────────────────────────────────
-@app.get("/pdf")
+@app.get("/pdf", dependencies=[Depends(verify_admin)])
 async def gerar_pdf(uf: str = None, limite: int = 100):
     rows = query(
         f"SELECT municipio_nome, uf, orgao_nome, objeto, valor_estimado, modalidade_nome, data_encerramento, url_pncp "
