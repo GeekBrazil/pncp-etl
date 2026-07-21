@@ -261,6 +261,27 @@ tr:hover td{background:rgba(99,102,241,.05)}
 .td-date{color:var(--yellow);white-space:nowrap;font-size:.73rem}
 .td-muted{color:var(--text);font-size:.76rem}
 
+/* VIEW TABS (Licitações / Score / Alertas) */
+.view-tabs{display:flex;gap:.35rem;flex-shrink:0}
+.view-tab{
+  padding:.42rem .95rem;border-radius:9px 9px 0 0;font-family:'Syne',sans-serif;
+  font-size:.78rem;font-weight:700;color:var(--muted);background:transparent;
+  border:1px solid transparent;border-bottom:none;cursor:pointer;transition:all .15s
+}
+.view-tab:hover{color:var(--text)}
+.view-tab.active{color:var(--accent2);background:var(--bg2);border-color:var(--border)}
+.view{flex:1;display:flex;flex-direction:column;overflow:hidden;gap:.65rem;min-height:0}
+.subhead{font-size:.68rem;color:var(--muted);flex-shrink:0;margin:-.2rem 0 .1rem}
+/* barra de receita per capita (Score) */
+.score-bar-wrap{display:inline-block;width:64px;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:.45rem}
+.score-bar{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--green));border-radius:3px}
+.ro-badge{font-size:.58rem;background:rgba(34,197,94,.15);color:var(--green);padding:.12rem .5rem;border-radius:10px;margin-left:.55rem;letter-spacing:.04em;text-transform:uppercase}
+
+/* MODO READ-ONLY (/publico) — some com controles de admin */
+body.readonly .admin-only{display:none!important}
+body.readonly .left-panel{display:none}
+body.readonly .layout{grid-template-columns:1fr}
+
 @media(max-width:800px){
   .layout{grid-template-columns:1fr;grid-template-rows:auto 1fr}
   html,body{height:auto;overflow:auto}
@@ -268,7 +289,8 @@ tr:hover td{background:rgba(99,102,241,.05)}
 }
 </style>
 </head>
-<body>
+<body class="__BODYCLASS__">
+<script>window.READONLY = __READONLY__;</script>
 <header>
   <div class="logo">PNCP <span>Control</span></div>
   <div class="header-right">Plataforma Municipal · <span id="last-update">—</span></div>
@@ -322,9 +344,17 @@ tr:hover td{background:rgba(99,102,241,.05)}
     </div>
   </div>
 
-  <!-- RIGHT: Licitações -->
+  <!-- RIGHT: Views (Licitações / Score Territorial / Alertas) -->
   <div class="right-panel">
 
+    <div class="view-tabs">
+      <button class="view-tab active" data-view="licitacoes" onclick="switchView('licitacoes')">📊 Licitações</button>
+      <button class="view-tab" data-view="score" onclick="switchView('score')">🏙 Score Territorial</button>
+      <button class="view-tab" data-view="alertas" onclick="switchView('alertas')">🚨 Alertas</button>
+    </div>
+
+    <!-- VIEW: Licitações -->
+    <div id="view-licitacoes" class="view">
     <!-- KPIs compactos -->
     <div class="kpis-bar">
       <div class="kpi"><div class="label">Licitações</div><div class="val" id="k-total">—</div></div>
@@ -345,7 +375,7 @@ tr:hover td{background:rgba(99,102,241,.05)}
         </div>
         <div class="action-btns">
           <button class="btn-sm btn-sm-outline" onclick="loadDados()" title="Atualizar">🔄</button>
-          <button class="btn-sm btn-sm-green" onclick="gerarPDF()">📄 PDF</button>
+          <button class="btn-sm btn-sm-green admin-only" onclick="gerarPDF()">📄 PDF</button>
         </div>
       </div>
       <!-- Filtros avançados linha 2 -->
@@ -392,6 +422,88 @@ tr:hover td{background:rgba(99,102,241,.05)}
         </table>
       </div>
     </div>
+    </div><!-- /view-licitacoes -->
+
+    <!-- VIEW: Score Territorial -->
+    <div id="view-score" class="view" style="display:none">
+      <div class="kpis-bar">
+        <div class="kpi"><div class="label">Municípios</div><div class="val" id="sc-count">—</div></div>
+        <div class="kpi"><div class="label">Média / hab</div><div class="val yellow" id="sc-media">—</div></div>
+        <div class="kpi"><div class="label">Maior / hab</div><div class="val green" id="sc-max">—</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <h2>🏙 Score Territorial</h2>
+          <div class="search-bar">
+            <input type="text" id="sc-search" placeholder="Buscar município..." oninput="renderScore()">
+            <select id="sc-uf" onchange="loadScore()"><option value="">Todos estados</option></select>
+            <span class="count-badge" id="sc-count-badge"></span>
+          </div>
+          <div class="action-btns">
+            <button class="btn-sm btn-sm-outline" onclick="loadScore()" title="Atualizar">🔄</button>
+          </div>
+        </div>
+        <div class="subhead">Receita municipal realizada (SICONFI) ÷ população (IBGE) — indicador de saúde fiscal / capacidade local.</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Município</th>
+              <th>UF</th>
+              <th style="text-align:right">População</th>
+              <th style="text-align:right">Receita Realizada</th>
+              <th style="text-align:right">Receita / hab</th>
+            </tr></thead>
+            <tbody id="sc-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: Alertas (Dispensa/Inexigibilidade de alto valor) -->
+    <div id="view-alertas" class="view" style="display:none">
+      <div class="kpis-bar">
+        <div class="kpi"><div class="label">Contratações</div><div class="val" id="al-count">—</div></div>
+        <div class="kpi"><div class="label">Valor Total</div><div class="val yellow" id="al-valor">—</div></div>
+        <div class="kpi"><div class="label">Maior valor</div><div class="val green" id="al-max">—</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <h2>🚨 Alertas de Transparência</h2>
+          <div class="search-bar">
+            <input type="text" id="al-search" placeholder="Buscar órgão, objeto, município..." oninput="renderAlertas()">
+            <select id="al-uf" onchange="loadAlertas()"><option value="">Todos estados</option></select>
+            <select id="al-min" onchange="loadAlertas()">
+              <option value="100000">≥ R$ 100 mil</option>
+              <option value="500000">≥ R$ 500 mil</option>
+              <option value="1000000" selected>≥ R$ 1 mi</option>
+              <option value="5000000">≥ R$ 5 mi</option>
+              <option value="10000000">≥ R$ 10 mi</option>
+            </select>
+            <span class="count-badge" id="al-count-badge"></span>
+          </div>
+          <div class="action-btns">
+            <button class="btn-sm btn-sm-outline" onclick="loadAlertas()" title="Atualizar">🔄</button>
+          </div>
+        </div>
+        <div class="subhead">Dispensa e Inexigibilidade de alto valor — compras que, em geral, deveriam passar por disputa aberta. Sinal clássico de baixa concorrência.</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Órgão</th>
+              <th>Município</th>
+              <th>UF</th>
+              <th>Objeto</th>
+              <th style="text-align:right">Valor</th>
+              <th>Modalidade</th>
+              <th>Publicação</th>
+              <th>PNCP</th>
+            </tr></thead>
+            <tbody id="al-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -424,7 +536,10 @@ window.onload = () => {
     modGrid.appendChild(l);
   });
 
-  loadKPIs(); loadDados(); loadHist();
+  loadKPIs(); loadDados();
+  if (!window.READONLY) loadHist();
+  initExtraViews();
+  if (window.READONLY) document.querySelector('.logo').insertAdjacentHTML('beforeend', '<span class="ro-badge">read-only</span>');
 };
 
 function toggleAll() {
@@ -665,13 +780,114 @@ function gerarPDF() {
   const uf = document.getElementById('filter-uf').value;
   window.open('/pdf' + (uf ? '?uf=' + uf : ''), '_blank');
 }
+
+/* ─── Views: Score Territorial + Alertas ─────────────────────────────── */
+function brlShort(v){
+  v = Number(v) || 0;
+  if (v >= 1e9) return 'R$ ' + (v/1e9).toFixed(1).replace('.',',') + ' Bi';
+  if (v >= 1e6) return 'R$ ' + (v/1e6).toFixed(1).replace('.',',') + ' M';
+  return 'R$ ' + Math.round(v).toLocaleString('pt-BR');
+}
+const _brl = v => v ? 'R$ ' + Number(v).toLocaleString('pt-BR', {maximumFractionDigits:0}) : '—';
+const _esc = s => String(s == null ? '—' : s).replace(/</g, '&lt;');
+
+let scoreLoaded = false, alertasLoaded = false;
+function switchView(name) {
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.style.display = (v.id === 'view-' + name) ? 'flex' : 'none');
+  if (name === 'score'   && !scoreLoaded)   loadScore();
+  if (name === 'alertas' && !alertasLoaded) loadAlertas();
+}
+
+function initExtraViews() {
+  const opts = '<option value="">Todos estados</option>' + UFS.map(u => `<option>${u}</option>`).join('');
+  document.getElementById('sc-uf').innerHTML = opts;
+  document.getElementById('al-uf').innerHTML = opts;
+}
+
+let scoreRows = [];
+async function loadScore() {
+  scoreLoaded = true;
+  const uf = document.getElementById('sc-uf').value;
+  const r = await fetch('/score-municipios?limit=500' + (uf ? '&uf=' + uf : ''));
+  scoreRows = await r.json();
+  const pcs = scoreRows.map(d => parseFloat(d.receita_per_capita) || 0).filter(v => v > 0);
+  const media = pcs.length ? pcs.reduce((a,b) => a+b, 0) / pcs.length : 0;
+  document.getElementById('sc-count').textContent = scoreRows.length.toLocaleString('pt-BR');
+  document.getElementById('sc-media').textContent = brlShort(media);
+  document.getElementById('sc-max').textContent   = brlShort(pcs.length ? Math.max(...pcs) : 0);
+  renderScore();
+}
+
+function renderScore() {
+  const q = document.getElementById('sc-search').value.toLowerCase();
+  const rows = scoreRows.filter(d => !q || (d.municipio_nome || '').toLowerCase().includes(q));
+  const maxPc = Math.max(1, ...rows.map(d => parseFloat(d.receita_per_capita) || 0));
+  document.getElementById('sc-count-badge').textContent = rows.length.toLocaleString('pt-BR') + ' municípios';
+  document.getElementById('sc-tbody').innerHTML = rows.map(d => {
+    const pc = parseFloat(d.receita_per_capita) || 0;
+    const w = Math.round(pc / maxPc * 100);
+    return `<tr>
+      <td class="td-muted">${_esc(d.municipio_nome)}</td>
+      <td class="td-muted">${_esc(d.uf)}</td>
+      <td class="td-muted" style="text-align:right">${(d.populacao || 0).toLocaleString('pt-BR')}</td>
+      <td class="td-val">${_brl(d.receita_realizada)}</td>
+      <td style="text-align:right;white-space:nowrap"><span style="color:var(--accent2);font-weight:600">${_brl(pc)}</span><span class="score-bar-wrap"><span class="score-bar" style="width:${w}%"></span></span></td>
+    </tr>`;
+  }).join('');
+}
+
+let alertasRows = [];
+async function loadAlertas() {
+  alertasLoaded = true;
+  const uf  = document.getElementById('al-uf').value;
+  const min = document.getElementById('al-min').value;
+  const r = await fetch(`/alertas/alto-valor-dispensa?valor_min=${min}&limit=300` + (uf ? '&uf=' + uf : ''));
+  alertasRows = await r.json();
+  const vals = alertasRows.map(d => parseFloat(d.valor_estimado) || 0);
+  document.getElementById('al-count').textContent = alertasRows.length.toLocaleString('pt-BR');
+  document.getElementById('al-valor').textContent = brlShort(vals.reduce((a,b) => a+b, 0));
+  document.getElementById('al-max').textContent   = brlShort(vals.length ? Math.max(...vals) : 0);
+  renderAlertas();
+}
+
+function renderAlertas() {
+  const q = document.getElementById('al-search').value.toLowerCase();
+  const rows = alertasRows.filter(d => !q || [d.orgao_nome, d.objeto, d.municipio_nome].join(' ').toLowerCase().includes(q));
+  document.getElementById('al-count-badge').textContent = rows.length.toLocaleString('pt-BR') + ' contratações';
+  document.getElementById('al-tbody').innerHTML = rows.map(d => `
+    <tr>
+      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.73rem;color:var(--muted)" title="${_esc(d.orgao_nome)}">${_esc((d.orgao_nome || '').slice(0,36))}</td>
+      <td class="td-muted">${_esc(d.municipio_nome)}</td>
+      <td class="td-muted">${_esc(d.uf)}</td>
+      <td class="td-obj" title="${_esc(d.objeto)}">${_esc((d.objeto || '').slice(0,60))}</td>
+      <td class="td-val">${_brl(d.valor_estimado)}</td>
+      <td class="td-muted" style="font-size:.72rem">${_esc(d.modalidade_nome)}</td>
+      <td class="td-date">${d.data_publicacao || '—'}</td>
+      <td class="td-link">${d.url_pncp ? `<a href="${d.url_pncp}" target="_blank" rel="noopener">↗</a>` : '—'}</td>
+    </tr>`).join('');
+}
 </script>
 </body>
 </html>"""
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
+def render_dashboard(readonly: bool) -> str:
+    """Mesmo template servido em dois modos: admin (/) e read-only (/publico).
+    No modo read-only o CSS `body.readonly` esconde todos os controles de admin
+    (ETL, enriquecer CNPJ, PDF, histórico) — sobram só as views de dados."""
+    return (HTML
+            .replace("__BODYCLASS__", "readonly" if readonly else "")
+            .replace("__READONLY__", "true" if readonly else "false"))
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(verify_admin)])
-async def dashboard(): return HTML
+async def dashboard(): return render_dashboard(False)
+
+@app.get("/publico", response_class=HTMLResponse, dependencies=[Depends(verify_api_key_or_admin)])
+async def dashboard_publico():
+    """Painel read-only (sem botões de admin). Continua atrás de autenticação
+    (X-API-Key ou Basic Auth) — só remove da UI as ações que mutam dados."""
+    return render_dashboard(True)
 
 @app.get("/kpis", dependencies=[Depends(verify_api_key_or_admin)])
 async def kpis():
