@@ -234,6 +234,86 @@ def bolsa_familia_municipio(ibge, meses=6, force=False):
         conn.close()
 
 
+def _ibge_municipios():
+    """Lista de todos os municípios do país (IBGE localidades) → [(codigo_ibge, uf)]."""
+    r = requests.get("https://servicodados.ibge.gov.br/api/v1/localidades/municipios",
+                     timeout=60)
+    r.raise_for_status()
+    out = []
+    for m in r.json():
+        cod = str(m.get("id"))
+        uf = (((m.get("microrregiao") or {}).get("mesorregiao") or {}).get("UF") or {}).get("sigla")
+        if cod:
+            out.append((cod, uf))
+    return out
+
+
+def _mes_bf_disponivel():
+    """Descobre o mês mais recente com dado de Novo Bolsa Família (testa de hoje-1 p/ trás)."""
+    if not API_KEY:
+        return None
+    y, m = date.today().year, date.today().month
+    for _ in range(6):
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+        am = y * 100 + m
+        try:
+            # município grande garante retorno se o mês existe (São Paulo capital = 3550308)
+            data = _get("novo-bolsa-familia-por-municipio",
+                        {"mesAno": str(am), "codigoIbge": "3550308", "pagina": 1})
+            if data:
+                return am
+        except Exception:
+            continue
+    return None
+
+
+def backfill_bolsa_familia(mes_ano=None, log=print):
+    """Backfill de Novo Bolsa Família p/ TODOS os municípios (resumível: pula os já
+    gravados no mês). Roda no VPS; ~5.570 municípios × PAUSA ≈ 75 min."""
+    if not API_KEY:
+        log("[ERRO] sem TRANSPARENCIA_API_KEY"); return
+    am = mes_ano or _mes_bf_disponivel()
+    if not am:
+        log("[ERRO] não achei mês disponível de Bolsa Família"); return
+    municipios = _ibge_municipios()
+    log(f"[INFO] mês {am} · {len(municipios)} municípios")
+
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute("SELECT codigo_ibge FROM bolsa_familia_municipio WHERE ano_mes = %s", (am,))
+    ja = {r[0] for r in cur.fetchall()}
+    log(f"[INFO] já gravados neste mês: {len(ja)} — retomando")
+
+    ok = 0
+    for i, (cod, _uf) in enumerate(municipios, 1):
+        if cod in ja:
+            continue
+        try:
+            data = _get("novo-bolsa-familia-por-municipio",
+                        {"mesAno": str(am), "codigoIbge": cod, "pagina": 1})
+        except Exception as e:
+            log(f"[{i}/{len(municipios)}] {cod} erro: {repr(e)[:80]}")
+            continue
+        valor = sum(float(d.get("valor") or 0) for d in data)
+        benef = sum(int(d.get("quantidadeBeneficiados") or 0) for d in data)
+        cur.execute(
+            """INSERT INTO bolsa_familia_municipio (codigo_ibge, ano_mes, valor, beneficiarios, importado_em)
+               VALUES (%s, %s, %s, %s, NOW())
+               ON CONFLICT (codigo_ibge, ano_mes) DO UPDATE
+                 SET valor = EXCLUDED.valor, beneficiarios = EXCLUDED.beneficiarios, importado_em = NOW()""",
+            (cod, am, valor, benef))
+        ok += 1
+        if ok % 100 == 0:
+            conn.commit()
+            log(f"[{i}/{len(municipios)}] gravados {ok} (último {cod}: R$ {valor:,.0f})")
+        time.sleep(PAUSA)
+    conn.commit()
+    conn.close()
+    log(f"[DONE] backfill BF mês {am}: {ok} municípios gravados.")
+
+
 if __name__ == "__main__":
     import sys, json
     if not API_KEY:
@@ -242,5 +322,8 @@ if __name__ == "__main__":
         print(json.dumps(recursos_por_cnpj(sys.argv[2], force=True), ensure_ascii=False, indent=2))
     elif len(sys.argv) >= 3 and sys.argv[1] == "bf":
         print(json.dumps(bolsa_familia_municipio(sys.argv[2], force=True), ensure_ascii=False, indent=2))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "backfill-bf":
+        mes = int(sys.argv[2]) if len(sys.argv) >= 3 else None
+        backfill_bolsa_familia(mes)
     else:
-        print("uso: transparencia_etl.py [cnpj <cnpj> | bf <ibge>]")
+        print("uso: transparencia_etl.py [cnpj <cnpj> | bf <ibge> | backfill-bf [AAAAMM]]")
