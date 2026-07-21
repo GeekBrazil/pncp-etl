@@ -1042,7 +1042,31 @@ async def mercado_publico(q: str, uf: str = None):
         ORDER BY data_encerramento ASC LIMIT 8
     """, [padrao, *params_uf])
 
-    return {"stats": stats, "top_orgaos": top_orgaos, "abertas": abertas}
+    # série mensal (últimos 12 meses) — trajetória do termo pra curiosidade/pesquisa
+    serie = query(f"""
+        SELECT to_char(date_trunc('month', data_publicacao), 'YYYY-MM') AS mes,
+               COUNT(*) AS total,
+               SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor
+        FROM licitacoes
+        WHERE objeto ILIKE %s{filtro_uf}
+          AND data_publicacao >= (date_trunc('month', CURRENT_DATE) - INTERVAL '11 months')
+        GROUP BY 1 ORDER BY 1
+    """, [padrao, *params_uf])
+
+    # tendência: soma dos 3 meses recentes vs 3 anteriores → em alta / estável / em queda
+    tot = [int(s["total"] or 0) for s in serie]
+    tendencia = None
+    if len(tot) >= 4:
+        rec, ant = sum(tot[-3:]), sum(tot[-6:-3]) or 0
+        if ant == 0:
+            tendencia = {"direcao": "alta", "variacao_pct": None} if rec else None
+        else:
+            v = round((rec - ant) / ant * 100)
+            tendencia = {"direcao": "alta" if v >= 8 else "queda" if v <= -8 else "estavel",
+                         "variacao_pct": v}
+
+    return {"stats": stats, "top_orgaos": top_orgaos, "abertas": abertas,
+            "serie_mensal": serie, "tendencia": tendencia}
 
 # Objetos de leilão que são imóveis (e não veículos/sucata/máquinas)
 LEILAO_IMOVEL_REGEX = r"imóve|imove|terreno|gleba|casa|apartamento|sala comercial|galpão|fazenda|sítio|chácara|prédio|edifício|área urbana|área rural"
