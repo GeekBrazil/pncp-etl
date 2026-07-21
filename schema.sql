@@ -247,3 +247,35 @@ CREATE TABLE IF NOT EXISTS sancoes_progress (
     total_gravado  INT DEFAULT 0,
     atualizado_em  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ─── Portal da Transparência (CGU) — gasto executado (5º pilar) ──────────────
+-- Recursos federais recebidos por CNPJ (despesas/recursos-recebidos). Cache on-demand.
+CREATE TABLE IF NOT EXISTS recursos_federais (
+    cnpj         VARCHAR(14),
+    ano_mes      INT,               -- AAAAMM
+    cod_orgao    VARCHAR(20),
+    nome_orgao   TEXT,
+    cod_ug       VARCHAR(20),
+    nome_ug      TEXT,
+    valor        NUMERIC(16,2),
+    importado_em TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_recursos_cnpj ON recursos_federais(cnpj);
+
+-- Marcador de cache por CNPJ (evita rebater a API a cada consulta).
+CREATE TABLE IF NOT EXISTS recursos_cache (
+    cnpj       VARCHAR(14) PRIMARY KEY,
+    total      NUMERIC(18,2),
+    registros  INT,
+    buscado_em TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Novo Bolsa Família por município (gasto social executado). Cache on-demand.
+CREATE TABLE IF NOT EXISTS bolsa_familia_municipio (
+    codigo_ibge   VARCHAR(7),
+    ano_mes       INT,              -- AAAAMM
+    valor         NUMERIC(16,2),
+    beneficiarios INT,
+    importado_em  TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (codigo_ibge, ano_mes)
+);

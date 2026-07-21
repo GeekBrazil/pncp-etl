@@ -1192,10 +1192,18 @@ async def consulta_cnpj(cnpj: str):
            FROM sancoes WHERE cnpj = %s ORDER BY data_fim DESC NULLS LAST""",
         (digitos,))
     ativas = [s for s in sancoes if not s["data_fim"] or str(s["data_fim"]) >= date.today().isoformat()]
+    # gasto executado: quanto de recurso federal a empresa recebeu (Portal da Transparência)
+    # — cruzamento investigativo com as sanções. Resiliente: nunca quebra a consulta.
+    try:
+        from transparencia_etl import recursos_por_cnpj as _recursos_cnpj
+        recursos = _recursos_cnpj(digitos, buscar_api=False)  # só cache: não trava a consulta
+    except Exception:
+        recursos = None
     return {"empresa": e, "socios": socios,
             "sancoes": sancoes,
             "sancionada": len(ativas) > 0,
-            "sancoes_ativas": len(ativas)}
+            "sancoes_ativas": len(ativas),
+            "recursos_federais": recursos}
 
 @app.get("/sancoes/stats", dependencies=[Depends(verify_api_key_or_admin)])
 async def sancoes_stats():
@@ -1222,6 +1230,27 @@ async def sancoes_por_cnpj(cnpj: str):
     ativas = [s for s in sancoes if not s["data_fim"] or str(s["data_fim"]) >= hoje]
     return {"cnpj": digitos, "sancionada": len(ativas) > 0,
             "sancoes_ativas": len(ativas), "sancoes": sancoes}
+
+# ─── Portal da Transparência (CGU) — gasto executado (5º pilar) ───────────────
+@app.get("/transparencia/recursos-cnpj/{cnpj}", dependencies=[Depends(verify_api_key_or_admin)])
+async def transparencia_recursos_cnpj(cnpj: str, force: bool = False):
+    """Recursos federais recebidos por um CNPJ (gasto executado da União),
+    cache-first. Cruza com sanções: 'empresa sancionada recebendo da União'."""
+    from transparencia_etl import recursos_por_cnpj
+    r = recursos_por_cnpj(cnpj, force=force)
+    if r is None:
+        raise HTTPException(status_code=400, detail="CNPJ inválido (14 dígitos) ou chave da Transparência ausente.")
+    return r
+
+@app.get("/transparencia/bolsa-familia/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def transparencia_bolsa_familia(ibge: str, meses: int = 6):
+    """Novo Bolsa Família por município (gasto social federal executado) — sinal
+    territorial pro raio-X municipal. Cache-first."""
+    from transparencia_etl import bolsa_familia_municipio
+    r = bolsa_familia_municipio(ibge, meses=min(max(meses, 1), 12))
+    if r is None:
+        raise HTTPException(status_code=400, detail="Código IBGE inválido.")
+    return r
 
 @app.get("/mercado-publico", dependencies=[Depends(verify_api_key_or_admin)])
 async def mercado_publico(q: str, uf: str = None):
