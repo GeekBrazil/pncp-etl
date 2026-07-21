@@ -1053,11 +1053,13 @@ async def mercado_publico(q: str, uf: str = None):
         GROUP BY 1 ORDER BY 1
     """, [padrao, *params_uf])
 
-    # tendência: soma dos 3 meses recentes vs 3 anteriores → em alta / estável / em queda
+    # tendência: ignora o mês corrente (parcial) e compara 3 meses fechados vs 3 anteriores
     tot = [int(s["total"] or 0) for s in serie]
+    mes_atual = date.today().strftime("%Y-%m")
+    tot_fechados = tot[:-1] if serie and serie[-1]["mes"] == mes_atual else tot
     tendencia = None
-    if len(tot) >= 4:
-        rec, ant = sum(tot[-3:]), sum(tot[-6:-3]) or 0
+    if len(tot_fechados) >= 6:
+        rec, ant = sum(tot_fechados[-3:]), sum(tot_fechados[-6:-3]) or 0
         if ant == 0:
             tendencia = {"direcao": "alta", "variacao_pct": None} if rec else None
         else:
