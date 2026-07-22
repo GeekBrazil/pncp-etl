@@ -3,16 +3,22 @@
 Finder de imobiliárias via dados abertos de CNPJ (Receita Federal).
 
 Filtra o cadastro nacional de estabelecimentos pelo CNAE de corretagem
-imobiliária (6821-8/01 e /02) nos municípios-alvo. Fonte: espelho público
-da Receita Federal (atualiza uma vez por mês) — sem API key, sem billing.
+imobiliária (6821-8/01 e /02) por UF. Fonte: espelho público da Receita
+Federal (atualiza uma vez por mês) — sem API key, sem billing.
+
+O download já é nacional (os 10 arquivos cobrem o Brasil inteiro); o filtro
+por UF decide o que grava. Prioridade atual: **Rio de Janeiro**. Pra varrer
+o Brasil todo, é só `UFS_ALVO=ALL`.
 
 Diferente do imob_coletor.py (que raspa o SITE da imobiliária pra pegar
 anúncios), este script só descobre QUEM existe formalmente registrado —
 nome, telefone, e-mail — e vira lead pro diretório (mesmo sem site).
 
 Uso:
-    python3 cnpj_imob_finder.py                 # roda pra todas as cidades-alvo
-    python3 cnpj_imob_finder.py --avisar         # lista leads pendentes (alertado=FALSE) e marca como avisados
+    python3 cnpj_imob_finder.py                  # UFS_ALVO (default RJ)
+    UFS_ALVO=RJ,SP python3 cnpj_imob_finder.py    # estados específicos
+    UFS_ALVO=ALL python3 cnpj_imob_finder.py      # Brasil inteiro
+    python3 cnpj_imob_finder.py --avisar          # lista/marca leads novos
 """
 import csv
 import io
@@ -31,19 +37,29 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/
 MIRROR_BASE = "https://dados-abertos-rf-cnpj.casadosdados.com.br"
 TMP_DIR = os.environ.get("CNPJ_TMP_DIR", "/tmp/cnpj_imob")
 
-# Município (código da Receita, não é o código IBGE) → (nome, UF).
-MUNICIPIOS_ALVO = {
-    "5801": ("Angra dos Reis", "RJ"),
-    "5851": ("Mangaratiba", "RJ"),
-    "5875": ("Paraty", "RJ"),
-    "6311": ("Caraguatatuba", "SP"),
-    "6509": ("Ilhabela", "SP"),
-    "7209": ("Ubatuba", "SP"),
-}
+# UFs alvo: "RJ" (default, prioridade), "RJ,SP,ES", ou "ALL" pro Brasil inteiro.
+_ufs_raw = os.environ.get("UFS_ALVO", "RJ").strip().upper()
+UFS_ALVO = None if _ufs_raw in ("ALL", "*", "BR") else {u.strip() for u in _ufs_raw.split(",") if u.strip()}
+
 # 6821-8/01 Corretagem na compra e venda e avaliação de imóveis; /02 corretagem no aluguel.
 # (6822-6 é "gestão/administração de propriedade" — administradora de condomínio, não corretora.)
 CNAES_ALVO = {"6821801", "6821802"}
 SITUACAO_ATIVA = "02"
+
+# código-do-município-da-Receita → nome. Preenchido por _carregar_municipios().
+MUNICIPIOS = {}
+
+
+def _carregar_municipios(pasta):
+    """Baixa o Municipios.zip (42KB) do espelho e monta código→nome."""
+    destino = os.path.join(TMP_DIR, "Municipios.zip")
+    _baixar(f"{MIRROR_BASE}/arquivos/{pasta}/Municipios.zip", destino)
+    with zipfile.ZipFile(destino) as z:
+        with z.open(z.namelist()[0]) as raw:
+            for cod, nome in csv.reader(io.TextIOWrapper(raw, encoding="latin-1"), delimiter=";"):
+                MUNICIPIOS[cod] = nome.strip().title()
+    os.remove(destino)
+    print(f"[cnpj_imob_finder] {len(MUNICIPIOS)} municípios carregados")
 
 
 def _pasta_mais_recente():
@@ -93,18 +109,18 @@ def _processar_zip(caminho_zip, conn):
             leitor = csv.reader(texto, delimiter=";")
             cur = conn.cursor()
             for row in leitor:
-                municipio_cod = row[20]
+                uf = row[19]
+                if UFS_ALVO is not None and uf not in UFS_ALVO:
+                    continue
                 cnae_principal = row[11]
                 cnae_secundarias = (row[12] or "").split(",")
-                if municipio_cod not in MUNICIPIOS_ALVO:
-                    continue
                 if cnae_principal not in CNAES_ALVO and not (CNAES_ALVO & set(cnae_secundarias)):
                     continue
                 if row[5] != SITUACAO_ATIVA:
                     continue  # só empresa ativa vira lead
 
                 cnpj = f"{row[0]}{row[1]}{row[2]}"
-                nome_municipio, uf = MUNICIPIOS_ALVO[municipio_cod]
+                nome_municipio = MUNICIPIOS.get(row[20], row[20])
                 telefone = f"({row[21]}) {row[22]}" if row[21] and row[22] else None
                 email = (row[27] or "").strip().lower() or None
                 raw_dict = {
@@ -137,7 +153,9 @@ def _processar_zip(caminho_zip, conn):
 def rodar():
     os.makedirs(TMP_DIR, exist_ok=True)
     pasta = _pasta_mais_recente()
-    print(f"[cnpj_imob_finder] usando pasta {pasta} do espelho da Receita")
+    alvo = "Brasil inteiro" if UFS_ALVO is None else "/".join(sorted(UFS_ALVO))
+    print(f"[cnpj_imob_finder] pasta {pasta} · alvo: {alvo}")
+    _carregar_municipios(pasta)
     conn = psycopg2.connect(DATABASE_URL)
     total = 0
     for i in range(10):
@@ -150,7 +168,7 @@ def rodar():
         total += achados
         print(f"  Estabelecimentos{i}.zip: {achados} lead(s) — total {total}")
     conn.close()
-    print(f"\n🏁 total de leads (cidades-alvo, CNAE corretagem imobiliária): {total}")
+    print(f"\n🏁 total de leads ({alvo}, CNAE corretagem imobiliária): {total}")
 
 
 def avisar(conn):

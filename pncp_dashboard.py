@@ -1321,15 +1321,20 @@ async def imobiliarias_diretorio(cidade: str = None):
     sql += " GROUP BY i.id, i.nome, i.site, i.telefone, i.cidade, i.uf ORDER BY anuncios DESC"
     return query(sql, params)
 
+UF_PRIORITARIA = "RJ"  # o litoral do Allan; lidera o seletor de regiões
+
 @app.get("/mercado/opcoes", dependencies=[Depends(verify_api_key_or_admin)])
-async def mercado_opcoes(cidade: str = None):
+async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 40):
     """Cidades/bairros/tipos disponíveis na base de mercado (pros filtros da UI).
     `regioes` une cidades com anúncios coletados e cidades com imobiliárias
-    achadas via CNPJ — o seletor da página mostra todas."""
+    achadas via CNPJ. RJ lidera; `uf=SP` restringe; `uf=ALL` ignora prioridade."""
     cidades = [r["cidade"] for r in query(
         "SELECT cidade, count(*) n FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade ORDER BY n DESC")]
+    filtro_uf, par_uf = "", []
+    if uf and uf.upper() not in ("ALL", "*"):
+        filtro_uf = "WHERE t.uf = %s"; par_uf = [uf.upper()]
     regioes = query(
-        """SELECT cidade, max(uf) AS uf, sum(anuncios)::int AS anuncios, sum(leads)::int AS leads
+        f"""SELECT cidade, max(uf) AS uf, sum(anuncios)::int AS anuncios, sum(leads)::int AS leads
            FROM (
              SELECT cidade, uf, count(*) AS anuncios, 0 AS leads
              FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade, uf
@@ -1337,19 +1342,29 @@ async def mercado_opcoes(cidade: str = None):
              SELECT l.cidade_alvo, l.uf, 0, count(*)
              FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
              WHERE e.situacao_cadastral = '02' GROUP BY l.cidade_alvo, l.uf
-           ) t GROUP BY cidade
+           ) t {filtro_uf} GROUP BY cidade
            HAVING sum(leads) > 0 OR sum(anuncios) >= 10
-           ORDER BY sum(anuncios) DESC, sum(leads) DESC""")
+           ORDER BY (max(uf) = %s) DESC, sum(anuncios) DESC, sum(leads) DESC
+           LIMIT %s""",
+        [*par_uf, UF_PRIORITARIA, min(limit, 200)])
+    # UFs disponíveis (pro filtro "resto do Brasil"), prioritária primeiro
+    ufs = [r["uf"] for r in query(
+        """SELECT uf, count(*) n FROM (
+             SELECT DISTINCT cidade, uf FROM imoveis_mercado WHERE uf IS NOT NULL
+             UNION SELECT DISTINCT cidade_alvo, uf FROM leads_imobiliarias
+           ) t WHERE uf IS NOT NULL GROUP BY uf ORDER BY (uf = %s) DESC, n DESC""",
+        (UF_PRIORITARIA,))]
     bairros, tipos = [], []
     if cidade:
         bairros = [r["bairro"] for r in query(
             "SELECT bairro, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND bairro IS NOT NULL GROUP BY bairro ORDER BY n DESC", (cidade,))]
         tipos = [r["tipo"] for r in query(
             "SELECT tipo, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
-    return {"cidades": cidades, "regioes": regioes, "bairros": bairros, "tipos": tipos}
+    return {"cidades": cidades, "regioes": regioes, "ufs": ufs, "uf_prioritaria": UF_PRIORITARIA,
+            "bairros": bairros, "tipos": tipos}
 
 @app.get("/leads/imobiliarias", dependencies=[Depends(verify_api_key_or_admin)])
-async def leads_imobiliarias(cidade: str = None, limit: int = 100):
+async def leads_imobiliarias(cidade: str = None, uf: str = None, limit: int = 100):
     """Imobiliárias achadas via CNPJ (CNAE de corretagem) — leads pro /pro."""
     sql = """SELECT e.cnpj, e.nome_fantasia, e.telefone, e.email, e.data_abertura,
                     l.cidade_alvo, l.uf, l.alertado, l.capturado_em
@@ -1359,6 +1374,9 @@ async def leads_imobiliarias(cidade: str = None, limit: int = 100):
     if cidade:
         sql += " AND l.cidade_alvo ILIKE %s"
         params.append(cidade)
+    if uf and uf.upper() not in ("ALL", "*"):
+        sql += " AND l.uf = %s"
+        params.append(uf.upper())
     sql += " ORDER BY l.capturado_em DESC LIMIT %s"
     params.append(min(limit, 500))
     return query(sql, params)
