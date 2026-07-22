@@ -1252,6 +1252,45 @@ async def transparencia_bolsa_familia(ibge: str, meses: int = 6):
         raise HTTPException(status_code=400, detail="Código IBGE inválido.")
     return r
 
+# ─── Mercado imobiliário: avaliador (AVM) + preço/m² por bairro ───────────────
+@app.get("/avaliador", dependencies=[Depends(verify_api_key_or_admin)])
+async def avaliador(cidade: str, tipo: str = None, area: float = None, bairro: str = None):
+    """Estimativa de valor de referência por comparáveis (não é avaliação NBR 14653)."""
+    from avm import avaliar as _avaliar
+    conn = db()
+    try:
+        return _avaliar(conn, cidade, tipo=tipo, area=area, bairro=bairro)
+    finally:
+        conn.close()
+
+@app.get("/precos-mercado", dependencies=[Depends(verify_api_key_or_admin)])
+async def precos_mercado(cidade: str, tipo: str = None, limit: int = 200):
+    """Preço/m² e preço mediano por bairro (a partir dos anúncios coletados)."""
+    sql = """SELECT bairro, tipo, count(*) AS n,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2) AS preco_m2_med,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) AS preco_med
+             FROM imoveis_mercado
+             WHERE preco_m2 IS NOT NULL AND preco_m2 > 0 AND cidade ILIKE %s"""
+    params = [cidade]
+    if tipo:
+        sql += " AND tipo = %s"; params.append(tipo)
+    sql += " GROUP BY bairro, tipo HAVING count(*) >= 2 ORDER BY preco_m2_med DESC LIMIT %s"
+    params.append(min(limit, 500))
+    return query(sql, params)
+
+@app.get("/mercado/opcoes", dependencies=[Depends(verify_api_key_or_admin)])
+async def mercado_opcoes(cidade: str = None):
+    """Cidades/bairros/tipos disponíveis na base de mercado (pros filtros da UI)."""
+    cidades = [r["cidade"] for r in query(
+        "SELECT cidade, count(*) n FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade ORDER BY n DESC")]
+    bairros, tipos = [], []
+    if cidade:
+        bairros = [r["bairro"] for r in query(
+            "SELECT bairro, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND bairro IS NOT NULL GROUP BY bairro ORDER BY n DESC", (cidade,))]
+        tipos = [r["tipo"] for r in query(
+            "SELECT tipo, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
+    return {"cidades": cidades, "bairros": bairros, "tipos": tipos}
+
 @app.get("/mercado-publico", dependencies=[Depends(verify_api_key_or_admin)])
 async def mercado_publico(q: str, uf: str = None):
     """Quanto o governo compra de <termo>? Estatísticas + maiores compradores +
