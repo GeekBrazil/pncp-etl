@@ -1291,6 +1291,32 @@ async def mercado_opcoes(cidade: str = None):
             "SELECT tipo, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
     return {"cidades": cidades, "bairros": bairros, "tipos": tipos}
 
+@app.get("/leads/imobiliarias", dependencies=[Depends(verify_api_key_or_admin)])
+async def leads_imobiliarias(cidade: str = None, limit: int = 100):
+    """Imobiliárias achadas via CNPJ (CNAE de corretagem) — leads pro /pro."""
+    sql = """SELECT e.cnpj, e.nome_fantasia, e.telefone, e.email, e.data_abertura,
+                    l.cidade_alvo, l.uf, l.alertado, l.capturado_em
+             FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
+             WHERE e.situacao_cadastral = '02'"""
+    params = []
+    if cidade:
+        sql += " AND l.cidade_alvo ILIKE %s"
+        params.append(cidade)
+    sql += " ORDER BY l.capturado_em DESC LIMIT %s"
+    params.append(min(limit, 500))
+    return query(sql, params)
+
+@app.get("/leads/imobiliarias/stats", dependencies=[Depends(verify_api_key_or_admin)])
+async def leads_imobiliarias_stats():
+    """Contagem por cidade — pro seletor da UI."""
+    return query(
+        """SELECT l.cidade_alvo AS cidade, l.uf, count(*) AS total,
+                  count(*) FILTER (WHERE NOT l.alertado) AS novos
+           FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
+           WHERE e.situacao_cadastral = '02'
+           GROUP BY l.cidade_alvo, l.uf ORDER BY total DESC"""
+    )
+
 @app.get("/mercado-publico", dependencies=[Depends(verify_api_key_or_admin)])
 async def mercado_publico(q: str, uf: str = None):
     """Quanto o governo compra de <termo>? Estatísticas + maiores compradores +
