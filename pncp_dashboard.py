@@ -1324,7 +1324,7 @@ async def imobiliarias_diretorio(cidade: str = None):
 UF_PRIORITARIA = "RJ"  # o litoral do Allan; lidera o seletor de regiões
 
 @app.get("/mercado/opcoes", dependencies=[Depends(verify_api_key_or_admin)])
-async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 40):
+async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 300):
     """Cidades/bairros/tipos disponíveis na base de mercado (pros filtros da UI).
     `regioes` une cidades com anúncios coletados e cidades com imobiliárias
     achadas via CNPJ. RJ lidera; `uf=SP` restringe; `uf=ALL` ignora prioridade."""
@@ -1349,13 +1349,18 @@ async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 40):
            HAVING sum(leads) > 0 OR sum(anuncios) >= 10
            ORDER BY (max(uf) = %s) DESC, sum(anuncios) DESC, sum(leads) DESC
            LIMIT %s""",
-        [*par_uf, UF_PRIORITARIA, min(limit, 200)])
-    # UFs disponíveis (pro filtro "resto do Brasil"), prioritária primeiro
+        [*par_uf, UF_PRIORITARIA, min(limit, 600)])
+    # UFs disponíveis (pro filtro "resto do Brasil"), prioritária primeiro.
+    # Só siglas válidas (evita ruído tipo "Ni"/"Ri" de addressRegion mal extraído).
     ufs = [r["uf"] for r in query(
         """SELECT uf, count(*) n FROM (
              SELECT DISTINCT cidade, uf FROM imoveis_mercado WHERE uf IS NOT NULL
              UNION SELECT DISTINCT cidade_alvo, uf FROM leads_imobiliarias
-           ) t WHERE uf IS NOT NULL GROUP BY uf ORDER BY (uf = %s) DESC, n DESC""",
+           ) t
+           WHERE uf IN ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS',
+                        'MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC',
+                        'SP','SE','TO')
+           GROUP BY uf ORDER BY (uf = %s) DESC, n DESC""",
         (UF_PRIORITARIA,))]
     bairros, tipos = [], []
     if cidade:

@@ -28,6 +28,10 @@ PAUSA_SITE = float(os.environ.get("IMOB_PAUSA", "1.0"))  # gentil por site
 TIPOS = ["apartamento", "cobertura", "casa", "terreno", "área", "area", "sítio", "sitio",
          "chácara", "chacara", "loja", "sala", "galpão", "galpao", "fazenda", "kitnet", "flat"]
 
+UFS_BR = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
+          "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
+          "SP", "SE", "TO"}
+
 
 def _get(url, timeout=20):
     r = requests.get(url, headers=UA, timeout=timeout)
@@ -96,7 +100,10 @@ def parse_anuncio(page, url):
     if m:
         bairro = m.group(1).strip()
     cidade = _limpa(addr.get("addressLocality")) or None
-    uf = (_limpa(addr.get("addressRegion")) or "")[:2] or None
+    # addressRegion vem inconsistente ("Niterói", "Rio de Janeiro", "RJ") — só
+    # aceita se for uma sigla de UF real; senão deixa o chamador usar a do CNPJ.
+    reg = (_limpa(addr.get("addressRegion")) or "").upper()
+    uf = reg if reg in UFS_BR else None
     # área (m²), tipo, quartos do texto livre
     ma = re.search(r"([\d.]+)\s*m[²2]", blob, re.I)
     area = None
