@@ -1263,6 +1263,10 @@ async def avaliador(cidade: str, tipo: str = None, area: float = None, bairro: s
     finally:
         conn.close()
 
+# Faixa de plausibilidade do preço/m² (R$) — corta extrações erradas de área
+# (ex: R$24/m² ou R$19.000/m² vindos de m² mal lido no anúncio).
+PRECO_M2_MIN, PRECO_M2_MAX = 200, 70000
+
 @app.get("/precos-mercado", dependencies=[Depends(verify_api_key_or_admin)])
 async def precos_mercado(cidade: str, tipo: str = None, limit: int = 200):
     """Preço/m² e preço mediano por bairro (a partir dos anúncios coletados)."""
@@ -1270,26 +1274,77 @@ async def precos_mercado(cidade: str, tipo: str = None, limit: int = 200):
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2) AS preco_m2_med,
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) AS preco_med
              FROM imoveis_mercado
-             WHERE preco_m2 IS NOT NULL AND preco_m2 > 0 AND cidade ILIKE %s"""
-    params = [cidade]
+             WHERE preco_m2 BETWEEN %s AND %s AND cidade ILIKE %s"""
+    params = [PRECO_M2_MIN, PRECO_M2_MAX, cidade]
     if tipo:
         sql += " AND tipo = %s"; params.append(tipo)
     sql += " GROUP BY bairro, tipo HAVING count(*) >= 2 ORDER BY preco_m2_med DESC LIMIT %s"
     params.append(min(limit, 500))
     return query(sql, params)
 
+@app.get("/mercado/anuncios", dependencies=[Depends(verify_api_key_or_admin)])
+async def mercado_anuncios(cidade: str = None, bairro: str = None, tipo: str = None,
+                           imobiliaria_id: int = None, limit: int = 60):
+    """Anúncios individuais (o detalhe atrás das medianas) — filtráveis por
+    bairro/tipo (drill-down do preço/m²) ou por imobiliária (vitrine)."""
+    sql = """SELECT a.id, a.preco, a.area, a.preco_m2, a.quartos, a.tipo, a.finalidade,
+                    a.bairro, a.cidade, a.uf, a.url, a.coletado_em,
+                    i.id AS imobiliaria_id, i.nome AS imobiliaria, i.site AS imobiliaria_site
+             FROM imoveis_mercado a LEFT JOIN imobiliarias i ON i.id = a.imobiliaria_id
+             WHERE a.preco IS NOT NULL
+               AND (a.preco_m2 IS NULL OR a.preco_m2 BETWEEN %s AND %s)"""
+    params = [PRECO_M2_MIN, PRECO_M2_MAX]
+    if cidade:
+        sql += " AND a.cidade ILIKE %s"; params.append(cidade)
+    if bairro:
+        sql += " AND a.bairro ILIKE %s"; params.append(bairro)
+    if tipo:
+        sql += " AND a.tipo = %s"; params.append(tipo)
+    if imobiliaria_id:
+        sql += " AND a.imobiliaria_id = %s"; params.append(imobiliaria_id)
+    sql += " ORDER BY a.preco_m2 IS NULL, a.coletado_em DESC LIMIT %s"
+    params.append(min(limit, 200))
+    return query(sql, params)
+
+@app.get("/imobiliarias/diretorio", dependencies=[Depends(verify_api_key_or_admin)])
+async def imobiliarias_diretorio(cidade: str = None):
+    """Imobiliárias com site monitorado + quantos anúncios ativos de cada uma."""
+    sql = """SELECT i.id, i.nome, i.site, i.telefone, i.cidade, i.uf,
+                    count(a.id) AS anuncios,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY a.preco_m2)
+                        FILTER (WHERE a.preco_m2 BETWEEN %s AND %s) AS preco_m2_med
+             FROM imobiliarias i LEFT JOIN imoveis_mercado a ON a.imobiliaria_id = i.id
+             WHERE i.coletavel"""
+    params = [PRECO_M2_MIN, PRECO_M2_MAX]
+    if cidade:
+        sql += " AND i.cidade ILIKE %s"; params.append(cidade)
+    sql += " GROUP BY i.id, i.nome, i.site, i.telefone, i.cidade, i.uf ORDER BY anuncios DESC"
+    return query(sql, params)
+
 @app.get("/mercado/opcoes", dependencies=[Depends(verify_api_key_or_admin)])
 async def mercado_opcoes(cidade: str = None):
-    """Cidades/bairros/tipos disponíveis na base de mercado (pros filtros da UI)."""
+    """Cidades/bairros/tipos disponíveis na base de mercado (pros filtros da UI).
+    `regioes` une cidades com anúncios coletados e cidades com imobiliárias
+    achadas via CNPJ — o seletor da página mostra todas."""
     cidades = [r["cidade"] for r in query(
         "SELECT cidade, count(*) n FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade ORDER BY n DESC")]
+    regioes = query(
+        """SELECT cidade, max(uf) AS uf, sum(anuncios)::int AS anuncios, sum(leads)::int AS leads
+           FROM (
+             SELECT cidade, uf, count(*) AS anuncios, 0 AS leads
+             FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade, uf
+             UNION ALL
+             SELECT l.cidade_alvo, l.uf, 0, count(*)
+             FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
+             WHERE e.situacao_cadastral = '02' GROUP BY l.cidade_alvo, l.uf
+           ) t GROUP BY cidade ORDER BY sum(anuncios) DESC, sum(leads) DESC""")
     bairros, tipos = [], []
     if cidade:
         bairros = [r["bairro"] for r in query(
             "SELECT bairro, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND bairro IS NOT NULL GROUP BY bairro ORDER BY n DESC", (cidade,))]
         tipos = [r["tipo"] for r in query(
             "SELECT tipo, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
-    return {"cidades": cidades, "bairros": bairros, "tipos": tipos}
+    return {"cidades": cidades, "regioes": regioes, "bairros": bairros, "tipos": tipos}
 
 @app.get("/leads/imobiliarias", dependencies=[Depends(verify_api_key_or_admin)])
 async def leads_imobiliarias(cidade: str = None, limit: int = 100):
