@@ -1274,7 +1274,7 @@ async def precos_mercado(cidade: str, tipo: str = None, limit: int = 200):
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2) AS preco_m2_med,
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) AS preco_med
              FROM imoveis_mercado
-             WHERE preco_m2 BETWEEN %s AND %s AND cidade ILIKE %s"""
+             WHERE preco_m2 BETWEEN %s AND %s AND unaccent(cidade) ILIKE unaccent(%s)"""
     params = [PRECO_M2_MIN, PRECO_M2_MAX, cidade]
     if tipo:
         sql += " AND tipo = %s"; params.append(tipo)
@@ -1295,7 +1295,7 @@ async def mercado_anuncios(cidade: str = None, bairro: str = None, tipo: str = N
                AND (a.preco_m2 IS NULL OR a.preco_m2 BETWEEN %s AND %s)"""
     params = [PRECO_M2_MIN, PRECO_M2_MAX]
     if cidade:
-        sql += " AND a.cidade ILIKE %s"; params.append(cidade)
+        sql += " AND unaccent(a.cidade) ILIKE unaccent(%s)"; params.append(cidade)
     if bairro:
         sql += " AND a.bairro ILIKE %s"; params.append(bairro)
     if tipo:
@@ -1317,7 +1317,7 @@ async def imobiliarias_diretorio(cidade: str = None):
              WHERE i.coletavel"""
     params = [PRECO_M2_MIN, PRECO_M2_MAX]
     if cidade:
-        sql += " AND i.cidade ILIKE %s"; params.append(cidade)
+        sql += " AND unaccent(i.cidade) ILIKE unaccent(%s)"; params.append(cidade)
     sql += " GROUP BY i.id, i.nome, i.site, i.telefone, i.cidade, i.uf ORDER BY anuncios DESC"
     return query(sql, params)
 
@@ -1345,7 +1345,7 @@ async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 300):
              SELECT l.cidade_alvo, l.uf, 0, count(*)
              FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
              WHERE e.situacao_cadastral = '02' GROUP BY l.cidade_alvo, l.uf
-           ) t {filtro_uf} GROUP BY lower(cidade)
+           ) t {filtro_uf} GROUP BY unaccent(lower(cidade))
            HAVING sum(leads) > 0 OR sum(anuncios) >= 10
            ORDER BY (max(uf) = %s) DESC, sum(anuncios) DESC, sum(leads) DESC
            LIMIT %s""",
@@ -1365,9 +1365,9 @@ async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 300):
     bairros, tipos = [], []
     if cidade:
         bairros = [r["bairro"] for r in query(
-            "SELECT bairro, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND bairro IS NOT NULL GROUP BY bairro ORDER BY n DESC", (cidade,))]
+            "SELECT bairro, count(*) n FROM imoveis_mercado WHERE unaccent(cidade) ILIKE unaccent(%s) AND bairro IS NOT NULL GROUP BY bairro ORDER BY n DESC", (cidade,))]
         tipos = [r["tipo"] for r in query(
-            "SELECT tipo, count(*) n FROM imoveis_mercado WHERE cidade ILIKE %s AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
+            "SELECT tipo, count(*) n FROM imoveis_mercado WHERE unaccent(cidade) ILIKE unaccent(%s) AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC", (cidade,))]
     return {"cidades": cidades, "regioes": regioes, "ufs": ufs, "uf_prioritaria": UF_PRIORITARIA,
             "bairros": bairros, "tipos": tipos}
 
@@ -1380,7 +1380,7 @@ async def leads_imobiliarias(cidade: str = None, uf: str = None, limit: int = 10
              WHERE e.situacao_cadastral = '02'"""
     params = []
     if cidade:
-        sql += " AND l.cidade_alvo ILIKE %s"
+        sql += " AND unaccent(l.cidade_alvo) ILIKE unaccent(%s)"
         params.append(cidade)
     if uf and uf.upper() not in ("ALL", "*"):
         sql += " AND l.uf = %s"
