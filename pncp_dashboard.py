@@ -1342,16 +1342,25 @@ async def leiloes_imoveis(uf: str = None, abertos: bool = True, limit: int = 50)
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
     pelo radar_loteamento_etl.py)."""
-    sql = "SELECT * FROM radar_loteamento WHERE score IS NOT NULL"
+    # bolsa_familia: valor do mês mais recente por município (gasto social executado),
+    # via LEFT JOIN LATERAL — alimenta a camada de calor "Bolsa Família" no mapa.
+    sql = """SELECT r.*, bf.valor AS bolsa_familia, bf.beneficiarios AS bf_beneficiarios
+             FROM radar_loteamento r
+             LEFT JOIN LATERAL (
+               SELECT valor, beneficiarios FROM bolsa_familia_municipio b
+               WHERE b.codigo_ibge = r.municipio_ibge
+               ORDER BY ano_mes DESC LIMIT 1
+             ) bf ON TRUE
+             WHERE r.score IS NOT NULL"""
     params: list = []
     if uf:
-        sql += " AND uf = %s"; params.append(uf)
+        sql += " AND r.uf = %s"; params.append(uf)
     if pop_min is not None:
-        sql += " AND pop_final >= %s"; params.append(pop_min)
+        sql += " AND r.pop_final >= %s"; params.append(pop_min)
     if pop_max is not None:
-        sql += " AND pop_final <= %s"; params.append(pop_max)
+        sql += " AND r.pop_final <= %s"; params.append(pop_max)
     # cap 1000: mapa de calor por UF precisa de todos os municípios (SP=645)
-    sql += " ORDER BY score DESC LIMIT %s"; params.append(min(limit, 1000))
+    sql += " ORDER BY r.score DESC LIMIT %s"; params.append(min(limit, 1000))
     return query(sql, params)
 
 @app.get("/agro/municipios", dependencies=[Depends(verify_api_key_or_admin)])
