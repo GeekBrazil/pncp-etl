@@ -1337,7 +1337,9 @@ async def mercado_opcoes(cidade: str = None):
              SELECT l.cidade_alvo, l.uf, 0, count(*)
              FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
              WHERE e.situacao_cadastral = '02' GROUP BY l.cidade_alvo, l.uf
-           ) t GROUP BY cidade ORDER BY sum(anuncios) DESC, sum(leads) DESC""")
+           ) t GROUP BY cidade
+           HAVING sum(leads) > 0 OR sum(anuncios) >= 10
+           ORDER BY sum(anuncios) DESC, sum(leads) DESC""")
     bairros, tipos = [], []
     if cidade:
         bairros = [r["bairro"] for r in query(
