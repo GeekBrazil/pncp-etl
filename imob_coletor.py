@@ -167,7 +167,8 @@ def coleta_imobiliaria(conn, dom, creci=None, nome=None, cidade=None, uf=None, m
     cur = conn.cursor()
     cur.execute("""INSERT INTO imobiliarias (creci, nome, site, telefone, cidade, uf, dominio, coletavel)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,TRUE)
-                   ON CONFLICT (creci) DO UPDATE SET site=EXCLUDED.site, dominio=EXCLUDED.dominio, atualizado_em=NOW()
+                   ON CONFLICT (dominio) DO UPDATE SET
+                       creci=COALESCE(EXCLUDED.creci, imobiliarias.creci), site=EXCLUDED.site, atualizado_em=NOW()
                    RETURNING id""",
                 (creci, nome or dom, base, tel, cidade, uf, dom))
     imob_id = cur.fetchone()[0]
@@ -184,7 +185,10 @@ def coleta_imobiliaria(conn, dom, creci=None, nome=None, cidade=None, uf=None, m
                 cur.execute("""INSERT INTO imoveis_mercado
                     (imobiliaria_id, fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos, bairro, cidade, uf, url)
                     VALUES (%s,%s,'anuncio',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT (url) DO UPDATE SET preco=EXCLUDED.preco, coletado_em=NOW()""",
+                    ON CONFLICT (url) DO UPDATE SET
+                        preco=EXCLUDED.preco, area=EXCLUDED.area, preco_m2=EXCLUDED.preco_m2,
+                        tipo=EXCLUDED.tipo, quartos=EXCLUDED.quartos, bairro=EXCLUDED.bairro,
+                        coletado_em=NOW()""",
                     (imob_id, dom, a["finalidade"], a["tipo"], a["preco"], a["area"], a["preco_m2"],
                      a["quartos"], a["bairro"], a["cidade"] or cidade, a["uf"] or uf, a["url"]))
                 gravados += 1

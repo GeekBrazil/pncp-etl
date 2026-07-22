@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS empresas (
     municipio          TEXT,
     capital_social     NUMERIC(15,2),
     data_abertura      DATE,
+    telefone           TEXT,
+    email              TEXT,
     raw_json           JSONB,
     atualizado_em      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -295,10 +297,10 @@ CREATE TABLE IF NOT EXISTS imobiliarias (
     dominio       TEXT,               -- host do site (dedup)
     obs           TEXT,
     atualizado_em TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (creci)
+    UNIQUE (creci),
+    UNIQUE (dominio)
 );
 CREATE INDEX IF NOT EXISTS idx_imob_cidade ON imobiliarias(cidade, uf);
-CREATE INDEX IF NOT EXISTS idx_imob_dominio ON imobiliarias(dominio);
 
 CREATE TABLE IF NOT EXISTS imoveis_mercado (
     id             SERIAL PRIMARY KEY,
@@ -322,3 +324,14 @@ CREATE TABLE IF NOT EXISTS imoveis_mercado (
 CREATE INDEX IF NOT EXISTS idx_merc_local ON imoveis_mercado(uf, cidade, bairro);
 CREATE INDEX IF NOT EXISTS idx_merc_tipo  ON imoveis_mercado(tipo);
 CREATE INDEX IF NOT EXISTS idx_merc_preco ON imoveis_mercado(preco);
+
+-- Leads de imobiliárias achadas via CNAE de corretagem (cnpj_imob_finder.py) —
+-- entram aqui mesmo sem site (o coletor só raspa depois de alguém achar o domínio).
+CREATE TABLE IF NOT EXISTS leads_imobiliarias (
+    cnpj         TEXT PRIMARY KEY REFERENCES empresas(cnpj) ON DELETE CASCADE,
+    cidade_alvo  TEXT,
+    uf           VARCHAR(2),
+    alertado     BOOLEAN DEFAULT FALSE,
+    capturado_em TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_leads_imob_alertado ON leads_imobiliarias(alertado);
