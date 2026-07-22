@@ -50,6 +50,16 @@ SITUACAO_ATIVA = "02"
 MUNICIPIOS = {}
 
 
+_MINUSCULAS = {"da", "de", "do", "das", "dos", "e"}
+
+
+def _titulo_pt(nome):
+    """Title-case pt-BR: conectivos minúsculos (Angra Dos Reis → Angra dos Reis)."""
+    palavras = nome.strip().lower().split()
+    return " ".join(p if p in _MINUSCULAS and i > 0 else p.capitalize()
+                    for i, p in enumerate(palavras))
+
+
 def _carregar_municipios(pasta):
     """Baixa o Municipios.zip (42KB) do espelho e monta código→nome."""
     destino = os.path.join(TMP_DIR, "Municipios.zip")
@@ -57,7 +67,7 @@ def _carregar_municipios(pasta):
     with zipfile.ZipFile(destino) as z:
         with z.open(z.namelist()[0]) as raw:
             for cod, nome in csv.reader(io.TextIOWrapper(raw, encoding="latin-1"), delimiter=";"):
-                MUNICIPIOS[cod] = nome.strip().title()
+                MUNICIPIOS[cod] = _titulo_pt(nome)
     os.remove(destino)
     print(f"[cnpj_imob_finder] {len(MUNICIPIOS)} municípios carregados")
 

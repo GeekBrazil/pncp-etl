@@ -1333,8 +1333,11 @@ async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 40):
     filtro_uf, par_uf = "", []
     if uf and uf.upper() not in ("ALL", "*"):
         filtro_uf = "WHERE t.uf = %s"; par_uf = [uf.upper()]
+    # agrupa por cidade case-insensitive (coletor grava "Angra dos Reis",
+    # Receita "Angra Dos Reis" — sem lower() virariam duas regiões).
     regioes = query(
-        f"""SELECT cidade, max(uf) AS uf, sum(anuncios)::int AS anuncios, sum(leads)::int AS leads
+        f"""SELECT max(cidade) AS cidade, max(uf) AS uf,
+                  sum(anuncios)::int AS anuncios, sum(leads)::int AS leads
            FROM (
              SELECT cidade, uf, count(*) AS anuncios, 0 AS leads
              FROM imoveis_mercado WHERE cidade IS NOT NULL GROUP BY cidade, uf
@@ -1342,7 +1345,7 @@ async def mercado_opcoes(cidade: str = None, uf: str = None, limit: int = 40):
              SELECT l.cidade_alvo, l.uf, 0, count(*)
              FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
              WHERE e.situacao_cadastral = '02' GROUP BY l.cidade_alvo, l.uf
-           ) t {filtro_uf} GROUP BY cidade
+           ) t {filtro_uf} GROUP BY lower(cidade)
            HAVING sum(leads) > 0 OR sum(anuncios) >= 10
            ORDER BY (max(uf) = %s) DESC, sum(anuncios) DESC, sum(leads) DESC
            LIMIT %s""",
