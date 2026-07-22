@@ -279,3 +279,46 @@ CREATE TABLE IF NOT EXISTS bolsa_familia_municipio (
     importado_em  TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (codigo_ibge, ano_mes)
 );
+
+-- ─── Diretório de imobiliárias + base de mercado (preços coletados) ──────────
+CREATE TABLE IF NOT EXISTS imobiliarias (
+    id            SERIAL PRIMARY KEY,
+    creci         VARCHAR(30),
+    nome          TEXT,
+    site          TEXT,
+    telefone      VARCHAR(40),
+    email         TEXT,
+    cidade        TEXT,
+    uf            VARCHAR(2),
+    endereco      TEXT,
+    coletavel     BOOLEAN,            -- listagem pública acessível p/ coleta?
+    dominio       TEXT,               -- host do site (dedup)
+    obs           TEXT,
+    atualizado_em TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (creci)
+);
+CREATE INDEX IF NOT EXISTS idx_imob_cidade ON imobiliarias(cidade, uf);
+CREATE INDEX IF NOT EXISTS idx_imob_dominio ON imobiliarias(dominio);
+
+CREATE TABLE IF NOT EXISTS imoveis_mercado (
+    id             SERIAL PRIMARY KEY,
+    imobiliaria_id INT REFERENCES imobiliarias(id) ON DELETE SET NULL,
+    fonte          TEXT,              -- domínio/portal de origem
+    origem         VARCHAR(10),       -- anuncio | itbi
+    finalidade     VARCHAR(10),       -- venda | aluguel
+    tipo           TEXT,              -- casa | apartamento | terreno | ...
+    preco          NUMERIC(14,2),
+    area           NUMERIC(10,2),
+    preco_m2       NUMERIC(12,2),
+    quartos        INT,
+    bairro         TEXT,
+    cidade         TEXT,
+    uf             VARCHAR(2),
+    url            TEXT UNIQUE,
+    lat            NUMERIC(9,6),
+    lng            NUMERIC(9,6),
+    coletado_em    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_merc_local ON imoveis_mercado(uf, cidade, bairro);
+CREATE INDEX IF NOT EXISTS idx_merc_tipo  ON imoveis_mercado(tipo);
+CREATE INDEX IF NOT EXISTS idx_merc_preco ON imoveis_mercado(preco);
