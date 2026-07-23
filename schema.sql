@@ -335,3 +335,35 @@ CREATE TABLE IF NOT EXISTS leads_imobiliarias (
     capturado_em TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_leads_imob_alertado ON leads_imobiliarias(alertado);
+
+-- ── Contratos do PNCP (API PNCP /api/consulta/v1/contratos) ──────────────────
+CREATE TABLE IF NOT EXISTS contratos (
+    numero_controle_pncp TEXT PRIMARY KEY,
+    cnpj_fornecedor      VARCHAR(14),            -- CNPJ do contratado/vencedor (niFornecedor)
+    nome_fornecedor      TEXT,                   -- razão social do fornecedor
+    orgao_cnpj           VARCHAR(18),            -- CNPJ do órgão contratante
+    orgao_nome           TEXT,                   -- Nome do órgão contratante
+    objeto               TEXT,                   -- Objeto do contrato
+    valor_inicial        NUMERIC(15,2),
+    valor_global         NUMERIC(15,2),
+    data_assinatura      DATE,
+    data_vigencia_inicio DATE,
+    data_vigencia_fim    DATE,
+    uf                   VARCHAR(2),
+    municipio_ibge       VARCHAR(7),
+    municipio_nome       TEXT,
+    url_pncp             TEXT,
+    importado_em         TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contratos_cnpj       ON contratos(cnpj_fornecedor);
+CREATE INDEX IF NOT EXISTS idx_contratos_uf         ON contratos(uf);
+CREATE INDEX IF NOT EXISTS idx_contratos_assinatura ON contratos(data_assinatura);
+
+-- Progresso incremental da carga de contratos
+CREATE TABLE IF NOT EXISTS contratos_progress (
+    data_processada DATE PRIMARY KEY,
+    concluido       BOOLEAN DEFAULT FALSE,
+    total_gravado   INT DEFAULT 0,
+    atualizado_em   TIMESTAMPTZ DEFAULT NOW()
+);
+
