@@ -1231,6 +1231,72 @@ async def sancoes_por_cnpj(cnpj: str):
     return {"cnpj": digitos, "sancionada": len(ativas) > 0,
             "sancoes_ativas": len(ativas), "sancoes": sancoes}
 
+@app.get("/contratos/sancionados", dependencies=[Depends(verify_api_key_or_admin)])
+async def contratos_sancionados(limit: int = 50, uf: Optional[str] = None):
+    """Lista contratos celebrados com empresas sancionadas (CEIS/CNEP/CEPIM) vigentes na data do contrato."""
+    sql = """
+        SELECT
+            c.numero_controle_pncp,
+            c.cnpj_fornecedor,
+            c.nome_fornecedor,
+            c.orgao_cnpj,
+            c.orgao_nome,
+            c.objeto,
+            c.valor_global,
+            c.data_assinatura,
+            c.uf,
+            c.municipio_nome,
+            c.url_pncp,
+            s.cadastro AS tipo_sancao_cadastro,
+            s.tipo_sancao,
+            s.orgao_sancionador,
+            s.data_inicio AS sancao_data_inicio,
+            s.data_fim AS sancao_data_fim
+        FROM contratos c
+        JOIN sancoes s ON c.cnpj_fornecedor = s.cnpj
+        WHERE (s.data_fim IS NULL OR s.data_fim >= c.data_assinatura)
+          AND (s.data_inicio IS NULL OR s.data_inicio <= c.data_assinatura)
+    """
+    params = []
+    if uf:
+        sql += " AND c.uf = %s"
+        params.append(uf.upper())
+    sql += " ORDER BY c.data_assinatura DESC, c.valor_global DESC LIMIT %s"
+    params.append(min(max(limit, 1), 200))
+
+    res = query(sql, tuple(params))
+    return {"total": len(res), "items": res}
+
+@app.get("/contratos/sancionados/stats", dependencies=[Depends(verify_api_key_or_admin)])
+async def contratos_sancionados_stats():
+    """Estatísticas agregadas de contratos firmados com empresas sancionadas."""
+    stats = query("""
+        SELECT
+            COUNT(DISTINCT c.numero_controle_pncp) AS total_contratos_sancionados,
+            COUNT(DISTINCT c.cnpj_fornecedor) AS total_empresas_sancionadas_contratadas,
+            COALESCE(SUM(c.valor_global), 0) AS valor_total_contratado,
+            COUNT(DISTINCT c.orgao_cnpj) AS total_orgaos
+        FROM contratos c
+        JOIN sancoes s ON c.cnpj_fornecedor = s.cnpj
+        WHERE (s.data_fim IS NULL OR s.data_fim >= c.data_assinatura)
+          AND (s.data_inicio IS NULL OR s.data_inicio <= c.data_assinatura);
+    """)[0]
+
+    por_uf = query("""
+        SELECT c.uf, COUNT(DISTINCT c.numero_controle_pncp) AS total, COALESCE(SUM(c.valor_global), 0) AS valor_total
+        FROM contratos c
+        JOIN sancoes s ON c.cnpj_fornecedor = s.cnpj
+        WHERE (s.data_fim IS NULL OR s.data_fim >= c.data_assinatura)
+          AND (s.data_inicio IS NULL OR s.data_inicio <= c.data_assinatura)
+        GROUP BY c.uf
+        ORDER BY total DESC, valor_total DESC
+        LIMIT 10;
+    """)
+
+    return {**stats, "por_uf": por_uf}
+
+
+
 # ─── Portal da Transparência (CGU) — gasto executado (5º pilar) ───────────────
 @app.get("/transparencia/recursos-cnpj/{cnpj}", dependencies=[Depends(verify_api_key_or_admin)])
 async def transparencia_recursos_cnpj(cnpj: str, force: bool = False):
