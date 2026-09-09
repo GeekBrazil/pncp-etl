@@ -1019,7 +1019,34 @@ async def empresa_detalhe(cnpj: str):
     return {"encontrado": True, "empresa": empresas[0], "socios": socios_rows}
 
 @app.get("/empresas", dependencies=[Depends(verify_api_key_or_admin)])
-async def empresas_busca(nome_socio: str = None, limit: int = 50):
+async def empresas_busca(
+    nome_socio: str = None,
+    nome: str = None,
+    categoria: str = None,
+    municipio: str = None,
+    uf: str = None,
+    situacao: str = None,
+    aberta_depois_de: str = None,
+    aberta_nos_ultimos_dias: int = None,
+    ja_contratado: bool = None,
+    limit: int = 50,
+):
+    """
+    Busca combinável do Radar CNPJ — cada filtro é opcional e todos se somam com E.
+
+    - nome_socio: ILIKE em socios.nome_socio (busca por pessoa -> achar CNPJ)
+    - nome: ILIKE em razao_social/nome_fantasia (tsvector já existe, mas ILIKE
+      cobre parcial melhor pra nome digitado incompleto)
+    - categoria: nome de categorias_cnae (ex: "restaurante") -> resolve pra
+      lista de codigo_cnae por trás
+    - municipio/uf: filtro exato (municipio usa nome resolvido, case-insensitive)
+    - situacao: "02" (ativa) etc — código cru da Receita
+    - aberta_depois_de: "YYYY-MM-DD"
+    - aberta_nos_ultimos_dias: atalho pra "CNPJ novo" (ex: 90)
+    - ja_contratado: true = só quem já venceu licitação (existe em `contratos`
+      pelo CNPJ); false = só quem NUNCA apareceu em `contratos` (candidato
+      "virgem" pra participar)
+    """
     if nome_socio:
         rows = query(
             """SELECT DISTINCT e.cnpj, e.razao_social, e.municipio, e.uf, s.nome_socio, s.qualificacao
@@ -1029,7 +1056,45 @@ async def empresas_busca(nome_socio: str = None, limit: int = 50):
             (f"%{nome_socio}%", limit),
         )
         return rows
-    return query("SELECT cnpj, razao_social, situacao_cadastral, municipio, uf FROM empresas ORDER BY atualizado_em DESC LIMIT %s", (limit,))
+
+    condicoes = []
+    params = []
+
+    if nome:
+        condicoes.append("(razao_social ILIKE %s OR nome_fantasia ILIKE %s)")
+        params.extend([f"%{nome}%", f"%{nome}%"])
+    if categoria:
+        condicoes.append(
+            """cnae_principal IN (SELECT codigo_cnae FROM categorias_cnae WHERE categoria = %s)"""
+        )
+        params.append(categoria)
+    if municipio:
+        condicoes.append("municipio ILIKE %s")
+        params.append(municipio)
+    if uf:
+        condicoes.append("uf = %s")
+        params.append(uf.upper())
+    if situacao:
+        condicoes.append("situacao_cadastral = %s")
+        params.append(situacao)
+    if aberta_depois_de:
+        condicoes.append("data_abertura >= %s")
+        params.append(aberta_depois_de)
+    if aberta_nos_ultimos_dias:
+        condicoes.append("data_abertura >= (CURRENT_DATE - %s * INTERVAL '1 day')")
+        params.append(aberta_nos_ultimos_dias)
+    if ja_contratado is True:
+        condicoes.append("EXISTS (SELECT 1 FROM contratos c WHERE c.cnpj_fornecedor = empresas.cnpj)")
+    elif ja_contratado is False:
+        condicoes.append("NOT EXISTS (SELECT 1 FROM contratos c WHERE c.cnpj_fornecedor = empresas.cnpj)")
+
+    where = f"WHERE {' AND '.join(condicoes)}" if condicoes else ""
+    sql = f"""SELECT cnpj, razao_social, nome_fantasia, situacao_cadastral, cnae_principal,
+                     municipio, uf, data_abertura, telefone, email, latitude, longitude
+              FROM empresas {where}
+              ORDER BY data_abertura DESC NULLS LAST LIMIT %s"""
+    params.append(limit)
+    return query(sql, params)
 
 @app.post("/empresas/enriquecer", dependencies=[Depends(verify_admin)])
 async def empresas_enriquecer(request: Request):
