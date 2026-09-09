@@ -20,6 +20,7 @@ import csv
 import io
 import os
 import re
+import shutil
 import sys
 import time
 import zipfile
@@ -31,8 +32,34 @@ import requests
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/pncp_db")
 MIRROR_BASE = "https://dados-abertos-rf-cnpj.casadosdados.com.br"
-TMP_DIR = os.environ.get("CNPJ_TMP_DIR", "/tmp/cnpj_nacional")
+# /tmp neste notebook fica numa partição pequena (raiz, ~8GB) — o download de
+# cada zip (~1-2GB) some assim que processa, mas por segurança o staging vai
+# pra debaixo de /home (partição grande, é onde o Docker/Postgres também
+# grava) em vez do /tmp padrão.
+TMP_DIR = os.environ.get("CNPJ_TMP_DIR", os.path.expanduser("~/cnpj_nacional_tmp"))
 SITUACAO_ATIVA = "02"
+
+# trava de disco: incidente de 2026-09-09 encheu a VPS por completo rodando
+# isso sem checagem nenhuma. Checa TODOS os caminhos relevantes a cada
+# arquivo — se qualquer um estiver abaixo do piso, para ANTES de gravar mais.
+# Importante: TMP_DIR e o volume do Postgres podem estar em PARTIÇÕES
+# DIFERENTES (neste notebook, / tem 8GB e /home tem o resto) — checar só um
+# dos dois dava falso positivo de segurança.
+DISCO_MINIMO_GB = float(os.environ.get("DISCO_MINIMO_GB", "3"))
+CAMINHOS_A_CHECAR = [p for p in os.environ.get("DISCO_CAMINHOS", f"{TMP_DIR},/home").split(",") if p]
+
+
+def checar_disco(*_ignorado):
+    for caminho in CAMINHOS_A_CHECAR:
+        if not os.path.exists(caminho):
+            continue
+        livre_gb = shutil.disk_usage(caminho).free / (1024 ** 3)
+        if livre_gb < DISCO_MINIMO_GB:
+            raise RuntimeError(
+                f"Disco de '{caminho}' abaixo do piso de segurança ({livre_gb:.1f}GB "
+                f"livres, mínimo {DISCO_MINIMO_GB}GB) — parando ANTES de gravar mais. "
+                f"Ver incidente de 2026-09-09 em project_cnpj_nacional."
+            )
 
 _UFS_RAW = os.environ.get("UFS_ALVO", "").strip().upper()
 UFS_ALVO = None if not _UFS_RAW or _UFS_RAW in ("ALL", "*", "BR") else {u.strip() for u in _UFS_RAW.split(",") if u.strip()}
@@ -166,6 +193,7 @@ def rodar_estabelecimentos():
     conn = psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=10, keepalives_interval=5, keepalives_count=3)
     total = 0
     for i in range(10):
+        checar_disco(TMP_DIR)
         url = f"{MIRROR_BASE}/arquivos/{pasta}/Estabelecimentos{i}.zip"
         destino = os.path.join(TMP_DIR, f"Estabelecimentos{i}.zip")
         print(f"  baixando {url} ...")
@@ -230,6 +258,7 @@ def rodar_socios():
 
     total = 0
     for i in range(10):
+        checar_disco(TMP_DIR)
         url = f"{MIRROR_BASE}/arquivos/{pasta}/Socios{i}.zip"
         destino = os.path.join(TMP_DIR, f"Socios{i}.zip")
         print(f"  baixando {url} ...")
@@ -291,6 +320,7 @@ def rodar_empresas():
     conn = psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=10, keepalives_interval=5, keepalives_count=3)
     total = 0
     for i in range(10):
+        checar_disco(TMP_DIR)
         url = f"{MIRROR_BASE}/arquivos/{pasta}/Empresas{i}.zip"
         destino = os.path.join(TMP_DIR, f"Empresas{i}.zip")
         print(f"  baixando {url} ...")
