@@ -73,7 +73,7 @@ def _titulo_pt(nome):
     return " ".join(p if p in _MINUSCULAS and i > 0 else p.capitalize() for i, p in enumerate(palavras))
 
 
-def _baixar(url, destino, tentativas=4):
+def _baixar(url, destino, tentativas=9):
     delay = 3
     for t in range(tentativas):
         try:
@@ -184,15 +184,15 @@ def _processar_zip_estabelecimentos(caminho_zip, conn):
     return gravados
 
 
-def rodar_estabelecimentos():
+def rodar_estabelecimentos(comeca_em=0):
     os.makedirs(TMP_DIR, exist_ok=True)
     pasta = _pasta_mais_recente()
     alvo = "Brasil inteiro" if UFS_ALVO is None else "/".join(sorted(UFS_ALVO))
-    print(f"[cnpj_nacional] pasta {pasta} · alvo: {alvo} (estabelecimentos ativos)")
+    print(f"[cnpj_nacional] pasta {pasta} · alvo: {alvo} (estabelecimentos ativos) · começando no arquivo {comeca_em}")
     _carregar_municipios(pasta)
     conn = psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=10, keepalives_interval=5, keepalives_count=3)
     total = 0
-    for i in range(10):
+    for i in range(comeca_em, 10):
         checar_disco(TMP_DIR)
         url = f"{MIRROR_BASE}/arquivos/{pasta}/Estabelecimentos{i}.zip"
         destino = os.path.join(TMP_DIR, f"Estabelecimentos{i}.zip")
@@ -243,7 +243,7 @@ def _processar_zip_socios(caminho_zip, conn, cnpjs_conhecidos):
     return gravados
 
 
-def rodar_socios():
+def rodar_socios(comeca_em=0):
     """Só grava sócio de CNPJ que já está em `empresas` (economiza — sócio de
     quem a gente nem carregou não serve pra nada)."""
     os.makedirs(TMP_DIR, exist_ok=True)
@@ -254,10 +254,10 @@ def rodar_socios():
     cnpjs_conhecidos = {}
     for (cnpj,) in cur.fetchall():
         cnpjs_conhecidos.setdefault(cnpj[:8], []).append(cnpj)
-    print(f"[cnpj_nacional] {len(cnpjs_conhecidos)} cnpj_básico(s) conhecido(s) em `empresas` — sócios só desses.")
+    print(f"[cnpj_nacional] {len(cnpjs_conhecidos)} cnpj_básico(s) conhecido(s) em `empresas` — sócios só desses. Começando no arquivo {comeca_em}")
 
     total = 0
-    for i in range(10):
+    for i in range(comeca_em, 10):
         checar_disco(TMP_DIR)
         url = f"{MIRROR_BASE}/arquivos/{pasta}/Socios{i}.zip"
         destino = os.path.join(TMP_DIR, f"Socios{i}.zip")
@@ -340,15 +340,16 @@ if __name__ == "__main__":
     parser.add_argument("--empresas", action="store_true")
     parser.add_argument("--tudo", action="store_true")
     parser.add_argument("--uf", help="UFs alvo, ex: RJ,SP (default: Brasil inteiro, via env UFS_ALVO)")
+    parser.add_argument("--comeca-em", type=int, default=0, help="pula pro arquivo N (de Estabelecimentos ou de Sócios, conforme o modo — retomar sem rebaixar o que já foi)")
     args = parser.parse_args()
     if args.uf:
         UFS_ALVO = {u.strip().upper() for u in args.uf.split(",")}
 
     if args.tudo or args.estabelecimentos:
-        rodar_estabelecimentos()
+        rodar_estabelecimentos(comeca_em=args.comeca_em)
     if args.tudo or args.empresas:
         rodar_empresas()
     if args.tudo or args.socios:
-        rodar_socios()
+        rodar_socios(comeca_em=args.comeca_em if args.socios and not args.tudo else 0)
     if not (args.tudo or args.estabelecimentos or args.empresas or args.socios):
         parser.error("Especifique --estabelecimentos, --empresas, --socios ou --tudo")
