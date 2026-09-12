@@ -20,9 +20,15 @@ from reportlab.lib.enums import TA_CENTER
 
 app = FastAPI(title="PNCP Control")
 
-# Variáveis de ambiente para segurança
-PNCP_API_KEY = os.environ.get("PNCP_API_KEY", "dev_key")
-ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev_secret")
+# Variáveis de ambiente para segurança — sem fallback fraco: se a env sumir,
+# o serviço recusa subir em vez de aceitar "dev_key"/"dev_secret" em produção.
+PNCP_API_KEY = os.environ.get("PNCP_API_KEY")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET")
+if not PNCP_API_KEY or not ADMIN_SECRET:
+    raise RuntimeError(
+        "PNCP_API_KEY e ADMIN_SECRET precisam estar definidos via variável de ambiente "
+        "(sem fallback — configure-os antes de subir o serviço)."
+    )
 
 # Autenticações
 security_basic = HTTPBasic(auto_error=False)
