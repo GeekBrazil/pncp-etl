@@ -44,6 +44,7 @@ FONTES = {
     "radar_cnpj_heatmap.py": "Receita Federal (CNPJ aberto)", "imob_finder.py": "Google Places",
     "imob_coletor.py": "Sites das imobiliárias", "imob_coletor_leads.py": "Sites das imobiliárias",
     "portal_olx.py": "OLX / Zap", "portal_zap.py": "OLX / Zap", "trends_etl.py": "licitações (interno)",
+    "caged_etl.py": "Novo CAGED (Ministério do Trabalho)",
 }
 # chaves de ligação: nota → colunas que a representam
 CHAVES = {
@@ -73,14 +74,16 @@ def banco():
     c = psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=10)
     c.set_session(readonly=True)
     cur = c.cursor()
-    cur.execute("select table_name from information_schema.tables where table_schema='public' and table_type='BASE TABLE' order by 1")
+    cur.execute("select table_name, table_type from information_schema.tables where table_schema='public' and table_type in ('BASE TABLE','VIEW') order by 1")
     tabelas = {}
-    for (t,) in cur.fetchall():
+    for (t, tipo) in cur.fetchall():
         cur.execute("select column_name, data_type from information_schema.columns where table_schema='public' and table_name=%s order by ordinal_position", (t,))
         cols = cur.fetchall()
         cur.execute("select reltuples::bigint from pg_class where relname=%s", (t,))
         est = cur.fetchone()[0]
-        if est < 300_000:
+        if tipo == "VIEW":
+            est = -1  # visão: calculada na hora a partir das tabelas
+        elif est < 300_000:
             cur.execute(f'select count(*) from "{t}"')
             est = cur.fetchone()[0]
         ult = None
@@ -93,7 +96,7 @@ def banco():
                         ult = (n, v)
                 except psycopg2.Error:
                     c.rollback()
-        tabelas[t] = {"cols": [n for n, _ in cols], "linhas": int(max(est, 0)), "ultima": ult}
+        tabelas[t] = {"cols": [n for n, _ in cols], "linhas": int(max(est, 0)), "ultima": ult, "visao": tipo == "VIEW"}
     return tabelas
 
 
@@ -243,7 +246,9 @@ def main():
         rotas_t = sorted(r for r, v in rotas.items() if t in v["tabelas"])
         chaves_t = [k for k, ts in chave_tabs.items() if t in ts]
         ult = f"{d['ultima'][1]:%Y-%m-%d %H:%M} (`{d['ultima'][0]}`)" if d["ultima"] and hasattr(d["ultima"][1], "strftime") else "sem coluna de data de carga"
-        corpo = [f"# {t}", "", f"- Linhas: **{d['linhas']:,}**".replace(",", "."), f"- Última carga: {ult}",
+        corpo = [f"# {t}" + (" (visão)" if d.get("visao") else ""), "",
+                 ("- Visão: calculada na hora a partir das tabelas" if d.get("visao") else f"- Linhas: **{d['linhas']:,}**".replace(",", ".")),
+                 f"- Última carga: {ult}",
                  f"- Colunas: {', '.join(d['cols'])}"]
         if quem:
             corpo += ["", "Alimentada por:"] + [f"- {link(e)}" for e in quem]
@@ -282,6 +287,8 @@ def main():
             continue  # controle interno de retomada, não é dado do site
         u = d["ultima"][1] if d["ultima"] else None
         agendados = [e for e, ts in grava.items() if t in ts and e in agenda]
+        if d.get("visao"):
+            continue
         if d["linhas"] == 0:
             alertas.append(f"- {link(t + ' (tabela)')} está **vazia**")
         elif u and hasattr(u, "replace"):
