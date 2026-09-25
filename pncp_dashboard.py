@@ -1231,6 +1231,59 @@ async def score_municipios_lista(
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
+# ─── Emprego formal (Novo CAGED) — tabela caged_agregado / visão caged_municipios,
+#     carregada por caged_etl.py (roda no notebook, grava pelo túnel) ────────────
+SECOES_CNAE = {
+    "A": "Agropecuária", "B": "Indústrias extrativas", "C": "Indústria de transformação", "D": "Eletricidade e gás",
+    "E": "Água e saneamento", "F": "Construção", "G": "Comércio", "H": "Transporte e armazenagem",
+    "I": "Alojamento e alimentação", "J": "Informação e comunicação", "K": "Finanças e seguros",
+    "L": "Atividades imobiliárias", "M": "Atividades profissionais", "N": "Serviços administrativos",
+    "O": "Administração pública", "P": "Educação", "Q": "Saúde e serviços sociais", "R": "Artes e recreação",
+    "S": "Outros serviços", "T": "Serviços domésticos", "U": "Organismos internacionais",
+}
+
+@app.get("/caged/municipio/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def caged_municipio(ibge: int, meses: int = 12):
+    """Emprego formal de um município (código IBGE de 7 dígitos): série mensal
+    (admissões, desligamentos, saldo, salário médio de admissão), total dos
+    últimos `meses` e setores que mais contrataram/demitiram no período."""
+    meses = max(1, min(meses, 36))
+    serie = query("""
+        SELECT competencia, SUM(admissoes) AS admissoes, SUM(desligamentos) AS desligamentos, SUM(saldo) AS saldo,
+               ROUND(SUM(salario_medio_adm * GREATEST(admissoes, 0)) / NULLIF(SUM(GREATEST(admissoes, 0)), 0), 2) AS salario_medio_adm
+        FROM caged_municipios WHERE municipio_ibge = %s AND competencia IN (SELECT competencia FROM caged_meses_completos)
+        GROUP BY competencia ORDER BY competencia DESC LIMIT %s""", [ibge, meses])
+    if not serie:
+        return {"municipio_ibge": ibge, "serie": [], "periodo": None, "setores": []}
+    comps = [r["competencia"] for r in serie]
+    setores = query("""
+        SELECT secao, SUM(admissoes) AS admissoes, SUM(desligamentos) AS desligamentos, SUM(saldo) AS saldo
+        FROM caged_municipios WHERE municipio_ibge = %s AND competencia BETWEEN %s AND %s
+        GROUP BY secao ORDER BY SUM(saldo) DESC""", [ibge, min(comps), max(comps)])
+    for r in setores:
+        r["setor"] = SECOES_CNAE.get(r["secao"], r["secao"])
+    periodo = {
+        "de": min(comps), "ate": max(comps), "meses": len(comps),
+        "admissoes": sum(r["admissoes"] or 0 for r in serie),
+        "desligamentos": sum(r["desligamentos"] or 0 for r in serie),
+        "saldo": sum(r["saldo"] or 0 for r in serie),
+    }
+    return {"municipio_ibge": ibge, "serie": list(reversed(serie)), "periodo": periodo, "setores": setores}
+
+@app.get("/caged/ranking", dependencies=[Depends(verify_api_key_or_admin)])
+async def caged_ranking(uf: int = None, meses: int = 12, limit: int = 50):
+    """Municípios que mais geraram emprego formal nos últimos `meses` (saldo),
+    opcionalmente numa UF (código IBGE da UF, ex.: 33 = RJ)."""
+    meses = max(1, min(meses, 36))
+    sql = """WITH ult AS (SELECT competencia FROM caged_meses_completos ORDER BY competencia DESC LIMIT %s)
+             SELECT municipio_ibge, uf, SUM(admissoes) AS admissoes, SUM(desligamentos) AS desligamentos, SUM(saldo) AS saldo
+             FROM caged_municipios WHERE competencia IN (SELECT competencia FROM ult)"""
+    params = [meses]
+    if uf:
+        sql += " AND uf = %s"; params.append(uf)
+    sql += " GROUP BY municipio_ibge, uf ORDER BY SUM(saldo) DESC LIMIT %s"; params.append(max(1, min(limit, 500)))
+    return query(sql, params)
+
 # ─── Ferramentas públicas (allancandido.com/ferramentas) ─────────────────────
 import re as _re
 from cnpj_enrich import buscar_cnpj as _buscar_cnpj_api, salvar_empresa as _salvar_empresa
