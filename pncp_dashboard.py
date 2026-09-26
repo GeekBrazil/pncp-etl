@@ -1772,6 +1772,30 @@ async def mercado_comparaveis(cidade: str, uf: str = None, quartos_min: int = 0,
     return {"quartos_min": quartos_min, "parecidos": parecidos, "cidade_m2": cidade_m2, "bairro_m2": bairro_m2}
 
 
+@app.get("/leiloes-outros", dependencies=[Depends(verify_api_key_or_admin)])
+async def leiloes_outros(fonte: str = None, uf: str = None, municipios: str = None, desde: str = None,
+                         ativos: bool = True, limit: int = 500):
+    """Leilões/vendas fora do PNCP (judicial = DJEN, bb, spu). Alimenta os avisos
+    pagos do site: `desde` (ISO) devolve só o que apareceu depois disso;
+    `uf` e `municipios` aceitam listas separadas por vírgula (IBGE)."""
+    sql = """SELECT fonte, id_externo, uf, cidade, municipio_ibge, tipo, modalidade, valor,
+                    data_sessao, url, origem, publicado, primeiro_visto
+             FROM leiloes_outros WHERE TRUE"""
+    p: list = []
+    if ativos:
+        sql += " AND ativo"
+    if fonte:
+        sql += " AND fonte = ANY(%s)"; p.append([f.strip() for f in fonte.split(",") if f.strip()])
+    if uf:
+        sql += " AND uf = ANY(%s)"; p.append([u.strip().upper() for u in uf.split(",") if u.strip()])
+    if municipios:
+        sql += " AND municipio_ibge = ANY(%s)"; p.append([m.strip() for m in municipios.split(",") if m.strip()])
+    if desde:
+        sql += " AND primeiro_visto > %s"; p.append(desde)
+    sql += " ORDER BY data_sessao NULLS LAST, primeiro_visto DESC LIMIT %s"; p.append(min(limit, 2000))
+    return query(sql, p)
+
+
 @app.get("/radar-loteamentos", dependencies=[Depends(verify_api_key_or_admin)])
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
