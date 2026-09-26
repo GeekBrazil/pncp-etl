@@ -1949,6 +1949,17 @@ async def municipio_detalhe(ibge: str):
         raise HTTPException(status_code=404, detail="Município sem dados")
     radar = query("SELECT pop_inicial, pop_final, ano_inicial, ano_final, crescimento_pct, infra_valor_12m, score AS radar_score FROM radar_loteamento WHERE municipio_ibge = %s", (ibge,))
     agro = query("SELECT estabelecimentos FROM agro_municipios WHERE municipio_ibge = %s", (ibge,))
+    # produção agropecuária anual (IBGE PAM + PPM, agro_producao_etl.py) + série das lavouras
+    agro_prod = None
+    try:
+        ap = query("SELECT * FROM agro_producao_atual WHERE municipio_ibge = %s", (ibge,))
+        if ap:
+            agro_prod = ap[0]
+            agro_prod["serie_lavouras"] = query(
+                """SELECT ano, lavoura_valor_mil FROM agro_producao
+                   WHERE municipio_ibge = %s AND lavoura_valor_mil IS NOT NULL ORDER BY ano""", (ibge,))
+    except Exception:
+        agro_prod = None  # tabela ainda não criada neste banco
     imob = None
     if score:
         # as tabelas de imobiliárias guardam a cidade por nome (a Receita grava
@@ -1990,6 +2001,7 @@ async def municipio_detalhe(ibge: str):
         "top_licitacoes": top_lic,
         "radar": radar[0] if radar else None,
         "agro": agro[0] if agro else None,
+        "agro_producao": agro_prod,
         "imobiliarias": imob,
         "mercado": mercado,
     }

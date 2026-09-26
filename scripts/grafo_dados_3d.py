@@ -9,7 +9,7 @@ hora de gerar; nada é inventado. Os cruzamentos são curados à mão (CRUZAMENT
 e cada um diz quais bases usa e por qual chave.
 
 Saída: ~/creative-lab/data/grafo-dados.json
-Uso: DATABASE_URL=... python scripts/grafo_dados_3d.py [--cidade 3304524]
+Uso: DATABASE_URL=... python scripts/grafo_dados_3d.py [--cidade 3300209]
 """
 import argparse
 import json
@@ -56,7 +56,8 @@ BASES = {
     "anuncios": ("imoveis_mercado", "mercado", ["nome_uf", "geo"], "Anúncios de imóveis", "cidade", "nome"),
     "placas": ("placas_campo", "campo", ["ibge", "geo", "cnpj"], "Placas de venda/aluguel na rua", "municipio_ibge", "ibge"),
     "radar_lot": ("radar_loteamento", "ibge", ["ibge"], "Crescimento da população", "municipio_ibge", "ibge"),
-    "agro": ("agro_municipios", "ibge", ["ibge"], "Perfil rural", "municipio_ibge", "ibge"),
+    "agro": ("agro_municipios", "ibge", ["ibge"], "Estabelecimentos rurais (Censo 2017)", "municipio_ibge", "ibge"),
+    "agro_producao": ("agro_producao", "ibge", ["ibge"], "Produção agrícola e pecuária (anual)", "municipio_ibge", "ibge"),
     "comex": ("comex_municipios", "mdic", ["nome_uf"], "Exportação e importação", "municipio_nome", "nome"),
     "uniao": ("imoveis_uniao", "spu", ["nome_uf"], "Imóveis da União", "municipio", "nome"),
     "litoral": ("regiao_litoral", "ibge", ["ibge"], "Recorte do litoral e portos", "municipio_ibge", "ibge"),
@@ -84,8 +85,10 @@ CRUZAMENTOS = [
      "O porto puxa exportação, emprego e preço de imóvel na região?", "Mapa do litoral"),
     ("patrimonio_publico", ["uniao", "licitacoes"], "nome_uf",
      "Que imóveis da União existem na cidade e o que o governo licita ali?", "Leilões e concessões"),
-    ("campo_x_cidade", ["agro", "comex", "radar_lot"], "nome_uf",
+    ("campo_x_cidade", ["agro_producao", "agro", "caged", "radar_lot", "comex"], "ibge",
      "A economia é rural ou urbana, e para onde está indo?", "Raio-X da Cidade"),
+    ("terra_x_preco", ["agro_producao", "anuncios", "radar_lot"], "ibge",
+     "Terra que produz muito está virando loteamento? O campo sustenta o preço do terreno?", "Radar de Loteamentos"),
 ]
 
 
@@ -131,6 +134,9 @@ def exemplo_cidade(cur, ibge):
     um("placas", "SELECT count(*) FROM placas_campo WHERE municipio_ibge=%s", (ibge,))
     um("radar_lot", "SELECT crescimento_pct FROM radar_loteamento WHERE municipio_ibge=%s", (ibge,))
     um("agro", "SELECT estabelecimentos FROM agro_municipios WHERE municipio_ibge=%s", (ibge,))
+    um("agro_producao", "SELECT lavoura_valor_mil FROM agro_producao_atual WHERE municipio_ibge=%s", (str(ibge),))
+    um("agro_cultura", "SELECT cultura_principal FROM agro_producao_atual WHERE municipio_ibge=%s", (str(ibge),))
+    um("agro_bovinos", "SELECT bovinos FROM agro_producao_atual WHERE municipio_ibge=%s", (str(ibge),))
     um("litoral", "SELECT porto FROM regiao_litoral WHERE municipio_ibge=%s", (ibge,))
     return {"ibge": ibge, "nome": nome, "uf": uf,
             "valores": {k: (float(x) if hasattr(x, "as_integer_ratio") or str(type(x)).endswith("Decimal'>") else x) for k, x in v.items()}}
@@ -138,7 +144,7 @@ def exemplo_cidade(cur, ibge):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cidade", default="3304524", help="código IBGE do exemplo (padrão: Rio das Ostras)")
+    ap.add_argument("--cidade", default="3300209", help="código IBGE do exemplo (padrão: Araruama — tem campo e mercado imobiliário)")
     args = ap.parse_args()
     url = os.environ.get("DATABASE_URL") or open(os.path.expanduser("~/.config/pncp/database_url")).read().strip()
     conn = psycopg2.connect(url)
