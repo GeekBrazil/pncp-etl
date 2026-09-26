@@ -1,0 +1,7 @@
+# Cidades que o coletor de portais (OLX + Zap) varre a cada rodada.
+# Formato: uf|cidade_bonita|regiao_olx|cidade_slug_zap
+# regiao_olx: o "bairro de região" que o OLX usa (ver URL ao navegar manualmente).
+# cidade_slug_zap: o pedaço depois de "uf+" na URL do Zap (zapimoveis.com.br/venda/imoveis/rj+<slug>/).
+RJ|Angra dos Reis|serra-angra-dos-reis-e-regiao|angra-dos-reis
+RJ|Rio das Ostras|norte-do-estado-do-rio/rio-das-ostras|rio-das-ostras
+RJ|Araruama|norte-do-estado-do-rio/araruama|araruama
