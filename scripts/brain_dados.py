@@ -186,11 +186,14 @@ def pagina_de(arquivo):
 
 def agenda_vps():
     try:
-        cron = subprocess.run(["ssh", "-o", "ConnectTimeout=8", VPS, "crontab -l; echo ===; cat /root/pncp-cron.sh"],
+        cron = subprocess.run(["ssh", "-o", "ConnectTimeout=8", VPS,
+                               "crontab -l; echo ===; cat /root/pncp-cron.sh; echo ===; cat /root/etl-noturno.sh"],
                               capture_output=True, text=True, timeout=20).stdout
     except Exception:
         return {}
-    tab, script = cron.split("===", 1) if "===" in cron else (cron, "")
+    partes = cron.split("===")
+    tab, script = partes[0], partes[1] if len(partes) > 1 else ""
+    noturno = partes[2] if len(partes) > 2 else ""
     alvo = {}
     for m in re.finditer(r"^\s*(\w+)\)\s+.*?python3(?: -m)? (\w+)", script, re.M):
         alvo[m.group(1)] = m.group(2) + ("" if m.group(2).endswith(".py") else ".py")
@@ -202,6 +205,14 @@ def agenda_vps():
             # tolerância antes de alertar: diário 3 dias, semanal 10, mensal 40
             limite = 40 if campos[2] != "*" else 10 if campos[4] != "*" else 3
             agenda[alvo[m.group(2)]] = (f"cron `{m.group(1).strip()}` no VPS" + (f" ({m.group(3)[1:].strip()})" if m.group(3) else ""), limite)
+    # fila noturna (/root/etl-noturno.sh): linhas "nome|período em dias|python3 script.py …"
+    if re.search(r"^[\d*/,\- ]+\s+/root/etl-noturno\.sh", tab, re.M):
+        for nome, periodo, arq in re.findall(r'^(?:FILA=")?(\w+)\|(\d+)\|python3 (\w+\.py)', noturno, re.M):
+            dias = int(periodo)
+            texto = f"fila noturna do VPS, a cada {dias} dia(s) (confere memória antes)"
+            # vários itens podem usar o mesmo script (comex do ano e do ano anterior): vale o mais frequente
+            if arq not in agenda or dias + 3 < agenda[arq][1]:
+                agenda[arq] = (texto, dias + 3 if dias < 30 else dias + 10)
     return agenda
 
 
