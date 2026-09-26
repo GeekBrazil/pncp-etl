@@ -280,10 +280,32 @@ def _parse_capital(s):
 
 
 _SQL_EMPRESA_UPDATE = """
-    UPDATE empresas SET razao_social = v.razao_social, capital_social = v.capital_social
-    FROM (VALUES %s) AS v(cnpj_basico, razao_social, capital_social)
+    UPDATE empresas SET razao_social = v.razao_social, capital_social = v.capital_social,
+           natureza_juridica = v.natureza_juridica
+    FROM (VALUES %s) AS v(cnpj_basico, razao_social, capital_social, natureza_juridica)
     WHERE left(empresas.cnpj, 8) = v.cnpj_basico
 """
+
+
+def carregar_naturezas(conn, pasta):
+    """Naturezas.zip é minúsculo (~1.5KB, ~90 códigos) — carrega e não precisa
+    retomada nem lote, é instantâneo."""
+    destino = os.path.join(TMP_DIR, "Naturezas.zip")
+    _baixar(f"{MIRROR_BASE}/arquivos/{pasta}/Naturezas.zip", destino)
+    linhas = []
+    with zipfile.ZipFile(destino) as z:
+        with z.open(z.namelist()[0]) as raw:
+            for cod, nome in csv.reader(io.TextIOWrapper(raw, encoding="latin-1"), delimiter=";"):
+                linhas.append((cod.strip(), nome.strip()))
+    os.remove(destino)
+    cur = conn.cursor()
+    psycopg2.extras.execute_values(
+        cur,
+        "INSERT INTO naturezas (codigo, descricao) VALUES %s ON CONFLICT (codigo) DO UPDATE SET descricao = EXCLUDED.descricao",
+        linhas,
+    )
+    conn.commit()
+    print(f"[cnpj_nacional] {len(linhas)} naturezas jurídicas carregadas")
 
 
 def _processar_zip_empresas(caminho_zip, conn):
@@ -305,7 +327,7 @@ def _processar_zip_empresas(caminho_zip, conn):
             texto = io.TextIOWrapper(raw, encoding="latin-1", newline="")
             leitor = csv.reader(texto, delimiter=";")
             for row in leitor:
-                lote.append((row[0], row[1] or None, _parse_capital(row[4])))
+                lote.append((row[0], row[1] or None, _parse_capital(row[4]), row[2] or None))
                 if len(lote) >= LOTE:
                     flush()
             flush()
@@ -313,11 +335,12 @@ def _processar_zip_empresas(caminho_zip, conn):
 
 
 def rodar_empresas():
-    """Completa razao_social e capital_social (só existem em Empresas*.zip,
-    não em Estabelecimentos*.zip) pra quem já está em `empresas`."""
+    """Completa razao_social, capital_social e natureza_juridica (só existem
+    em Empresas*.zip, não em Estabelecimentos*.zip) pra quem já está em `empresas`."""
     os.makedirs(TMP_DIR, exist_ok=True)
     pasta = _pasta_mais_recente()
     conn = psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=10, keepalives_interval=5, keepalives_count=3)
+    carregar_naturezas(conn, pasta)
     total = 0
     for i in range(10):
         checar_disco(TMP_DIR)
