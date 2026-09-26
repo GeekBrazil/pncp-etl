@@ -46,21 +46,25 @@ def _num(txt):
 
 
 def _extrair_cards(page):
+    # textContent, não innerText: o OLX usa content-visibility e o card fora da
+    # tela devolve innerText vazio (era por isso que só ~5 de 50 vinham com preço).
+    # O local é o .olx-adcard__location exato — o [class*=location] pegava o
+    # bloco "local + data", que às vezes começa pela data ("Hoje, 06:08").
     return page.eval_on_selector_all(
         "section.olx-adcard",
         """els => els.map(el => {
             const link = el.querySelector('[data-testid="adcard-link"]');
             const priceEl = el.querySelector('.olx-adcard__price');
-            const locEl = el.querySelector('[class*="location"]');
+            const locEl = el.querySelector('.olx-adcard__location');
             const details = [...el.querySelectorAll('.olx-adcard__detail')]
                 .map(d => d.getAttribute('aria-label'));
             return {
                 href: link ? link.href : null,
                 titulo: link ? link.title : null,
-                preco_txt: priceEl ? priceEl.innerText : null,
-                loc_txt: locEl ? locEl.innerText : null,
+                preco_txt: priceEl ? priceEl.textContent : null,
+                loc_txt: locEl ? locEl.textContent : null,
                 details,
-                dono: el.innerText.includes('Direto com o proprietário'),
+                dono: el.textContent.includes('Direto com o proprietário'),
             };
         })""",
     )
@@ -103,8 +107,9 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
                 digs = re.sub(r"[^\d]", "", c["preco_txt"])
                 if digs:
                     preco = float(digs)
-                loc = (c["loc_txt"] or "").split("\n")[0]
-                partes = [x.strip() for x in loc.split(",")]
+                # "Rio das Ostras, Costazul" ou "Rio das Ostras - RJ"
+                loc = re.sub(r"\s+-\s+[A-Z]{2}\s*$", "", (c["loc_txt"] or "").strip())
+                partes = [x.strip() for x in loc.split(",") if x.strip()]
                 cidade_card = partes[0] if partes else cidade
                 bairro = partes[1] if len(partes) > 1 else None
                 area = quartos = banheiros = None
@@ -118,6 +123,9 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
                         quartos = _num(d)
                     elif "banheiro" in dl:
                         banheiros = _num(d)
+                if area is None:  # sem o detalhe, o título costuma trazer "210 m²"
+                    mt = re.search(r"(\d[\d.]*)\s*m[²2]", c["titulo"] or "")
+                    area = _num(mt.group(1).replace(".", "")) if mt else None
                 preco_m2 = round(preco / area, 2) if preco and area else None
                 anunciante_tipo = "proprietario" if c["dono"] else None
                 tipo = _tipo_do_titulo(c["titulo"] or "")

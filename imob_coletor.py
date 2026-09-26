@@ -15,6 +15,8 @@ import re
 import json
 import time
 import html
+import unicodedata
+import urllib.parse
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -124,6 +126,10 @@ def parse_anuncio(page, url):
         if quartos is None and ex.get("quartos"):
             try: quartos = int(ex["quartos"])
             except Exception: pass
+    # "alug/locação" solto na descrição ("aceita locação", "ótimo para alugar")
+    # marcava venda como aluguel; aluguel mensal acima de R$ 30 mil não existe aqui
+    if finalidade == "aluguel" and preco and preco > 30000:
+        finalidade = "venda"
     preco_m2 = round(preco / area, 2) if (preco and area) else None
     return {
         "url": (listing.get("url") or url).split("?")[0],
@@ -132,7 +138,84 @@ def parse_anuncio(page, url):
     }
 
 
+# ── anúncio lido do próprio endereço ───────────────────────────────────────
+# Várias plataformas de site de imobiliária põem o anúncio inteiro na URL:
+#   /imovel/casa-com-3-dormitorios-a-venda-120-m-por-r-59000000-jardim-marilea-rio-das-ostras-rj/5767
+#   /imovel/...-sala-para-alugar-por-r-1500-mes-village-rio-das-ostras-rj/8647
+# Venda vem em centavos (59000000 = R$ 590.000,00); aluguel "-mes" vem em reais
+# (conferido na página da Atlântica Imóveis, 2026-09-26). Serve quando a página
+# não tem JSON-LD ou está fora do ar e só o sitemap responde.
+_SLUG = re.compile(r"-por-r-(\d+)(-mes)?-(.+)-([a-z]{2})$")
+_municipios_uf = None
+
+
+def _slugify(s):
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+
+
+def _cidades_por_uf():
+    """{uf: [(slug, nome)]} da lista do IBGE, com cache em ~/.cache (a API às vezes vem em gzip)."""
+    global _municipios_uf
+    if _municipios_uf is None:
+        cache = os.path.expanduser("~/.cache/ibge_municipios_uf.json")
+        if os.path.exists(cache):
+            _municipios_uf = json.load(open(cache))
+        else:
+            r = requests.get("https://servicodados.ibge.gov.br/api/v1/localidades/municipios", timeout=60)
+            _municipios_uf = {}
+            for m in r.json():
+                uf = ((m.get("microrregiao") or {}).get("mesorregiao") or {}).get("UF", {}).get("sigla") or \
+                     (((m.get("regiao-imediata") or {}).get("regiao-intermediaria") or {}).get("UF") or {}).get("sigla")
+                _municipios_uf.setdefault((uf or "").lower(), []).append((_slugify(m["nome"]), m["nome"]))
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            json.dump(_municipios_uf, open(cache, "w"))
+    return _municipios_uf
+
+
+def parse_slug(url):
+    caminho = urllib.parse.urlparse(url).path.rstrip("/")
+    partes = caminho.split("/")
+    slug = partes[-2] if partes[-1].isdigit() and len(partes) > 1 else partes[-1]
+    m = _SLUG.search(slug)
+    if not m:
+        return None
+    valor, mes, local, uf = int(m.group(1)), bool(m.group(2)), m.group(3), m.group(4)
+    aluguel = mes or bool(re.search(r"para-alugar|locacao|-aluguel", slug))
+    preco = float(valor) if mes else valor / 100
+    # cidade = o nome de município (da UF) mais longo que fecha o trecho de local
+    cidade, bairro = None, None
+    for cs, nome in sorted(_cidades_por_uf().get(uf, []), key=lambda x: -len(x[0])):
+        if local == cs or local.endswith("-" + cs):
+            cidade = nome
+            resto = local[: -len(cs)].strip("-")
+            bairro = resto.replace("-", " ").title() or None
+            break
+    if not cidade:
+        return None
+    ma = re.search(r"-(\d+)-m-por-r-", slug)
+    area = float(ma.group(1)) if ma else None
+    mq = re.search(r"-com-(\d+)-(?:dormitorio|quarto|suite)", slug)
+    quartos = int(mq.group(1)) if mq else None
+    # tipo só no começo ("terreno-a-venda-…-casa-grande-…" é terreno, não casa)
+    cabeca = re.split(r"-a-venda|-para-alugar|-com-|-por-r-", slug)[0]
+    tipo = next((t.replace("area", "área").replace("sitio", "sítio").replace("chacara", "chácara").replace("galpao", "galpão")
+                 for t in TIPOS if re.search(rf"(^|-){t}(-|$)", cabeca)), None)
+    preco_m2 = round(preco / area, 2) if area else None
+    # descarta leitura absurda (unidade trocada, área de terreno em hectare etc.)
+    if preco_m2 and not (5 <= preco_m2 <= 60000 if aluguel else 200 <= preco_m2 <= 60000):
+        return None
+    return {"url": url.split("?")[0], "preco": preco, "area": area, "preco_m2": preco_m2, "quartos": quartos,
+            "bairro": bairro, "cidade": cidade, "uf": uf.upper(), "tipo": tipo,
+            "finalidade": "aluguel" if aluguel else "venda"}
+
+
 _PROP_PAT = re.compile(r"detalhe|imovel|imoveis|/ref|codigo|/id[-_/]|comprar|/venda/|/aluguel/", re.I)
+
+
+def _mesmo_dominio(url, dom):
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return host == dom or host.endswith("." + dom)
 
 
 def descobrir_urls(dom, home, cap=45):
@@ -151,12 +234,15 @@ def descobrir_urls(dom, home, cap=45):
             if xx:
                 locs += re.findall(r"<loc>\s*([^<\s]+)", xx)
         for l in locs:
-            if _PROP_PAT.search(l):
+            # só anúncio do próprio site: modelo de site pronto às vezes traz o
+            # sitemap da demonstração (ex.: portalunsoft com imóveis de MG e SC)
+            if _PROP_PAT.search(l) and _mesmo_dominio(l, dom):
                 urls.add(l.split("?")[0])
         if urls:
             break
     if len(urls) < 3:  # fallback: links da home
-        urls |= {u.split("?")[0] for u in re.findall(r'href="(https?://[^"]+)"', home) if _PROP_PAT.search(u)}
+        urls |= {u.split("?")[0] for u in re.findall(r'href="(https?://[^"]+)"', home)
+                 if _PROP_PAT.search(u) and _mesmo_dominio(u, dom)}
     return list(urls)[:cap]
 
 
@@ -186,9 +272,11 @@ def coleta_imobiliaria(conn, dom, creci=None, nome=None, cidade=None, uf=None, m
     gravados = 0
     for u in urls:
         page = _get(u)
-        if page:
-            a = parse_anuncio(page, u)
-            if a and (a["preco"] or a["area"]):
+        a = parse_anuncio(page, u) if page else None
+        if not a:
+            a = parse_slug(u)  # página sem JSON-LD ou fora do ar: lê o anúncio do endereço
+        if a:
+            if a["preco"] or a["area"]:
                 cur.execute("""INSERT INTO imoveis_mercado
                     (imobiliaria_id, fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos, bairro, cidade, uf, url)
                     VALUES (%s,%s,'anuncio',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)

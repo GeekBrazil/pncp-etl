@@ -10,8 +10,10 @@ que raspa JSON-LD/sitemap. Domínio sem site ou sem anúncio é pulado sozinho.
 
 Uso:
     python3 imob_coletor_leads.py --uf RJ [--limite 300] [--so-imob]
+    python3 imob_coletor_leads.py --uf RJ --cidade "Rio das Ostras" --cidade Araruama
     --so-imob : só domínios que parecem de imobiliária (imov/imob/corretor/…)
     --limite N: para após N sites (resumível — pula quem já tem anúncio hoje)
+    --cidade  : só leads dessas cidades (repetível; sem acento/maiúscula tanto faz)
 """
 import argparse
 import os
@@ -45,15 +47,19 @@ def dominio_do_email(email):
     return dom
 
 
-def candidatos(conn, uf, so_imob):
+def candidatos(conn, uf, so_imob, cidades=None):
     cur = conn.cursor()
+    filtro, params = "", [uf]
+    if cidades:
+        filtro = " AND unaccent(lower(l.cidade_alvo)) = ANY (SELECT unaccent(lower(c)) FROM unnest(%s::text[]) c)"
+        params.append(cidades)
     cur.execute(
-        """SELECT DISTINCT ON (lower(split_part(e.email,'@',2)))
+        f"""SELECT DISTINCT ON (lower(split_part(e.email,'@',2)))
                   e.email, e.nome_fantasia, l.cidade_alvo, l.uf
            FROM empresas e JOIN leads_imobiliarias l ON l.cnpj = e.cnpj
-           WHERE l.uf = %s AND e.email ~ '@' AND e.situacao_cadastral = '02'
+           WHERE l.uf = %s AND e.email ~ '@' AND e.situacao_cadastral = '02'{filtro}
            ORDER BY lower(split_part(e.email,'@',2)), e.nome_fantasia""",
-        (uf,),
+        params,
     )
     vistos = set()
     for email, nome, cidade, uf_l in cur.fetchall():
@@ -83,10 +89,11 @@ def main():
     ap.add_argument("--uf", default="RJ")
     ap.add_argument("--limite", type=int, default=0)
     ap.add_argument("--so-imob", action="store_true")
+    ap.add_argument("--cidade", action="append", help="só leads desta cidade (repetível)")
     args = ap.parse_args()
 
     conn = psycopg2.connect(DATABASE_URL)
-    lista = list(candidatos(conn, args.uf, args.so_imob))
+    lista = list(candidatos(conn, args.uf, args.so_imob, args.cidade))
     print(f"[coletor-leads] {len(lista)} domínios candidatos (uf={args.uf}, so_imob={args.so_imob})", flush=True)
 
     feitos = anuncios = com_site = 0
