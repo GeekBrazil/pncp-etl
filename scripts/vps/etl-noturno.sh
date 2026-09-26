@@ -6,7 +6,8 @@
 # - Cada ETL tem um período em dias; /root/etl-noturno.estado guarda o último
 #   sucesso (nome=epoch). Só roda o que venceu. Falha não grava estado: tenta de novo amanhã.
 # - Não começa ETL novo depois de LIMITE_HHMM (horário UTC do VPS).
-# Medido em 2026-09-26 (pico do container): radar 85 MiB/31 s, comex 73 MiB/12 s.
+# Medido em 2026-09-26 (pico do container): radar 85 MiB/31 s, comex 73 MiB/12 s, agro 78 MiB/206 s,
+# imóveis da União ~7 min, contratos ~1 min; agro_producao (PAM+PPM) ~6 min com --anos 2.
 LOG=/var/log/pncp-cron.log
 ESTADO=/root/etl-noturno.estado
 MIN_LIVRE_MB=${MIN_LIVRE_MB:-600}
@@ -20,7 +21,8 @@ comex_ano|7|python3 comex_etl.py --importar --ano $ANO
 radar|30|python3 radar_loteamento_etl.py --importar --ano-fim $((ANO-1))
 comex|30|python3 comex_etl.py --importar --ano $((ANO-1))
 uniao|30|python3 imoveis_uniao_etl.py --importar
-agro|365|python3 agro_etl.py --importar"
+agro|365|python3 agro_etl.py --importar
+agro_producao|30|python3 agro_producao_etl.py --importar --anos 2"
 
 log() { echo "$(date "+%F %T") [noturno] $*" >> "$LOG"; }
 livre_mb() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
