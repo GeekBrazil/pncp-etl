@@ -52,7 +52,7 @@ def _jsonld(page):
 
 
 OLLAMA = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:latest")
 
 
 def _ollama_extract(texto):

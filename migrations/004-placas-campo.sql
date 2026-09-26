@@ -28,3 +28,11 @@ CREATE TABLE IF NOT EXISTS placas_campo (
 );
 CREATE INDEX IF NOT EXISTS placas_campo_mun ON placas_campo (municipio_ibge, visto_em);
 CREATE INDEX IF NOT EXISTS placas_campo_tel ON placas_campo (telefone_chave);
+
+-- 2026-09-26: todas as fotos são guardadas. Sem GPS a placa fica com lat/lon nulos
+-- (ou herda o GPS de uma foto parecida / da foto anterior da sessão — gps_origem diz qual).
+-- Fotos quase iguais da mesma placa viram "similares" dela, não amostra nova.
+ALTER TABLE placas_campo ALTER COLUMN lat DROP NOT NULL, ALTER COLUMN lon DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS gps_origem TEXT,          -- foto | similar | sessao | null
+  ADD COLUMN IF NOT EXISTS foto_hash TEXT,           -- dHash (hex) da foto principal
+  ADD COLUMN IF NOT EXISTS fotos_similares INTEGER NOT NULL DEFAULT 0;
