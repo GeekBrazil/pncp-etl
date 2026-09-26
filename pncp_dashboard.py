@@ -1780,8 +1780,10 @@ async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = 
     # via LEFT JOIN LATERAL — alimenta a camada de calor "Bolsa Família" no mapa.
     # preco_m2_venda / aluguel_mediano: camadas de preço do mapa (nulas sem amostra)
     sql = f"""WITH {_MERCADO_CTE}
-             SELECT r.*, bf.valor AS bolsa_familia, bf.beneficiarios AS bf_beneficiarios, {_MERCADO_COLS}
+             SELECT r.*, bf.valor AS bolsa_familia, bf.beneficiarios AS bf_beneficiarios, {_MERCADO_COLS},
+                    sm.receita_realizada, sm.exercicio AS receita_exercicio
              FROM radar_loteamento r
+             LEFT JOIN score_municipios sm ON sm.municipio_ibge = r.municipio_ibge
              LEFT JOIN LATERAL (
                SELECT valor, beneficiarios FROM bolsa_familia_municipio b
                WHERE b.codigo_ibge = r.municipio_ibge
