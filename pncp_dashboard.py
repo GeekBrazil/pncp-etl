@@ -1703,19 +1703,57 @@ async def leiloes_imoveis(uf: str = None, abertos: bool = True, limit: int = 50)
     params.append(min(limit, 200))
     return query(sql, params)
 
+# ─── Preços de imóveis por município (imoveis_mercado: sites de imobiliária,
+#     OLX, Zap) — alimenta a camada de preço do mapa e o bloco do Raio-X.
+#     imoveis_mercado guarda a cidade por nome, então o casamento com o código
+#     IBGE é por nome sem acento + UF. Só publica mediana com amostra mínima:
+#     com poucos anúncios o número engana mais do que informa.
+MERCADO_AMOSTRA_MIN = 10
+MERCADO_JANELA_DIAS = 180
+_MERCADO_CTE = f"""
+  mk AS (
+    SELECT unaccent(lower(cidade)) AS k, uf,
+           count(*) FILTER (WHERE finalidade = 'venda') AS anuncios_venda,
+           count(*) FILTER (WHERE finalidade = 'aluguel') AS anuncios_aluguel,
+           count(*) FILTER (WHERE finalidade = 'venda' AND preco_m2 BETWEEN 300 AND 60000
+                            AND tipo IS DISTINCT FROM 'terreno') AS n_m2,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2) FILTER (
+               WHERE finalidade = 'venda' AND preco_m2 BETWEEN 300 AND 60000
+                 AND tipo IS DISTINCT FROM 'terreno') AS m2,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) FILTER (
+               WHERE finalidade = 'venda' AND preco >= 20000) AS venda_med,
+           count(*) FILTER (WHERE finalidade = 'aluguel' AND preco BETWEEN 200 AND 30000) AS n_alug,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) FILTER (
+               WHERE finalidade = 'aluguel' AND preco BETWEEN 200 AND 30000) AS alug,
+           count(*) FILTER (WHERE anunciante_tipo = 'proprietario') AS dono_direto,
+           count(DISTINCT imobiliaria_id) AS imobiliarias_com_anuncio,
+           max(coletado_em) AS atualizado_em
+    FROM imoveis_mercado
+    WHERE cidade IS NOT NULL AND coletado_em > NOW() - interval '{MERCADO_JANELA_DIAS} days'
+    GROUP BY 1, 2
+  )"""
+_MERCADO_COLS = f"""
+    CASE WHEN mk.n_m2 >= {MERCADO_AMOSTRA_MIN} THEN round(mk.m2::numeric) END AS preco_m2_venda,
+    CASE WHEN mk.n_alug >= {MERCADO_AMOSTRA_MIN} THEN round(mk.alug::numeric) END AS aluguel_mediano,
+    mk.anuncios_venda, mk.anuncios_aluguel"""
+
+
 @app.get("/radar-loteamentos", dependencies=[Depends(verify_api_key_or_admin)])
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
     pelo radar_loteamento_etl.py)."""
     # bolsa_familia: valor do mês mais recente por município (gasto social executado),
     # via LEFT JOIN LATERAL — alimenta a camada de calor "Bolsa Família" no mapa.
-    sql = """SELECT r.*, bf.valor AS bolsa_familia, bf.beneficiarios AS bf_beneficiarios
+    # preco_m2_venda / aluguel_mediano: camadas de preço do mapa (nulas sem amostra)
+    sql = f"""WITH {_MERCADO_CTE}
+             SELECT r.*, bf.valor AS bolsa_familia, bf.beneficiarios AS bf_beneficiarios, {_MERCADO_COLS}
              FROM radar_loteamento r
              LEFT JOIN LATERAL (
                SELECT valor, beneficiarios FROM bolsa_familia_municipio b
                WHERE b.codigo_ibge = r.municipio_ibge
                ORDER BY ano_mes DESC LIMIT 1
              ) bf ON TRUE
+             LEFT JOIN mk ON mk.k = unaccent(lower(r.municipio_nome)) AND mk.uf = r.uf
              WHERE r.score IS NOT NULL"""
     params: list = []
     if uf:
@@ -1925,6 +1963,27 @@ async def municipio_detalhe(ibge: str):
                    (SELECT count(*) FROM imoveis_mercado a WHERE a.uf = %(uf)s
                       AND unaccent(lower(a.cidade)) = unaccent(lower(%(nome)s))) AS anuncios
         """, {"nome": nome, "uf": uf})[0]
+    mercado = None
+    if score:
+        m = query(f"""WITH {_MERCADO_CTE}
+                      SELECT {_MERCADO_COLS}, round(mk.venda_med::numeric) AS preco_mediano_venda,
+                             mk.n_m2 AS amostra_m2, mk.n_alug AS amostra_aluguel, mk.dono_direto,
+                             mk.imobiliarias_com_anuncio, mk.atualizado_em
+                      FROM mk WHERE mk.k = unaccent(lower(%s)) AND mk.uf = %s""",
+                  (score[0]["municipio_nome"], score[0]["uf"]))
+        if m:
+            mercado = m[0]
+            # bairros com amostra mínima, do mais caro ao mais barato
+            mercado["bairros"] = query(f"""
+                SELECT bairro, count(*) AS anuncios,
+                       round(percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2)::numeric) AS preco_m2
+                FROM imoveis_mercado
+                WHERE unaccent(lower(cidade)) = unaccent(lower(%s)) AND uf = %s AND bairro IS NOT NULL
+                  AND finalidade = 'venda' AND preco_m2 BETWEEN 300 AND 60000
+                  AND tipo IS DISTINCT FROM 'terreno'
+                  AND coletado_em > NOW() - interval '{MERCADO_JANELA_DIAS} days'
+                GROUP BY bairro HAVING count(*) >= 6
+                ORDER BY preco_m2 DESC LIMIT 12""", (score[0]["municipio_nome"], score[0]["uf"]))
     return {
         "score": score[0] if score else None,
         "licitacoes": lic[0] if lic else None,
@@ -1932,6 +1991,7 @@ async def municipio_detalhe(ibge: str):
         "radar": radar[0] if radar else None,
         "agro": agro[0] if agro else None,
         "imobiliarias": imob,
+        "mercado": mercado,
     }
 
 @app.get("/score-municipios/stats", dependencies=[Depends(verify_api_key_or_admin)])
