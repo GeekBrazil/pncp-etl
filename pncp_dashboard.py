@@ -1725,6 +1725,9 @@ _MERCADO_CTE = f"""
            count(*) FILTER (WHERE finalidade = 'aluguel' AND preco BETWEEN 200 AND 30000) AS n_alug,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY preco) FILTER (
                WHERE finalidade = 'aluguel' AND preco BETWEEN 200 AND 30000) AS alug,
+           count(*) FILTER (WHERE finalidade = 'venda' AND tipo = 'terreno' AND preco_m2 BETWEEN 20 AND 20000) AS n_terreno,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2) FILTER (
+               WHERE finalidade = 'venda' AND tipo = 'terreno' AND preco_m2 BETWEEN 20 AND 20000) AS terreno,
            count(*) FILTER (WHERE anunciante_tipo = 'proprietario') AS dono_direto,
            count(DISTINCT imobiliaria_id) AS imobiliarias_com_anuncio,
            max(coletado_em) AS atualizado_em
@@ -1960,6 +1963,16 @@ async def municipio_detalhe(ibge: str):
                    WHERE municipio_ibge = %s AND lavoura_valor_mil IS NOT NULL ORDER BY ano""", (ibge,))
     except Exception:
         agro_prod = None  # tabela ainda não criada neste banco
+    litoral = query("SELECT recorte, porto FROM regiao_litoral WHERE municipio_ibge = %s", (int(ibge),)) if ibge.isdigit() else []
+    comex = None
+    if score:
+        cx = query("""SELECT ano, sum(fob_usd) FILTER (WHERE fluxo ILIKE 'export%%') AS exportacao_usd,
+                             sum(fob_usd) FILTER (WHERE fluxo ILIKE 'import%%') AS importacao_usd
+                      FROM comex_municipios
+                      WHERE unaccent(lower(municipio_nome)) = unaccent(lower(%s)) AND uf = %s
+                        AND ano = (SELECT max(ano) - 1 FROM comex_municipios)
+                      GROUP BY ano""", (score[0]["municipio_nome"], score[0]["uf"]))
+        comex = cx[0] if cx else None
     imob = None
     if score:
         # as tabelas de imobiliárias guardam a cidade por nome (a Receita grava
@@ -1978,6 +1991,8 @@ async def municipio_detalhe(ibge: str):
     if score:
         m = query(f"""WITH {_MERCADO_CTE}
                       SELECT {_MERCADO_COLS}, round(mk.venda_med::numeric) AS preco_mediano_venda,
+                             CASE WHEN mk.n_terreno >= 5 THEN round(mk.terreno::numeric) END AS terreno_m2,
+                             mk.n_terreno AS amostra_terreno,
                              mk.n_m2 AS amostra_m2, mk.n_alug AS amostra_aluguel, mk.dono_direto,
                              mk.imobiliarias_com_anuncio, mk.atualizado_em
                       FROM mk WHERE mk.k = unaccent(lower(%s)) AND mk.uf = %s""",
@@ -2002,6 +2017,8 @@ async def municipio_detalhe(ibge: str):
         "radar": radar[0] if radar else None,
         "agro": agro[0] if agro else None,
         "agro_producao": agro_prod,
+        "litoral": litoral[0] if litoral else None,
+        "comex": comex,
         "imobiliarias": imob,
         "mercado": mercado,
     }
