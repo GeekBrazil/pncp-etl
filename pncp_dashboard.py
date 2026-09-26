@@ -1907,12 +1907,21 @@ async def dashboard_live(uf: str = None):
                COUNT(*) FILTER (WHERE l.modalidade_id IN (1,13)
                    AND l.objeto ~* '""" + LEILAO_IMOVEL_REGEX + """'
                    AND l.data_encerramento >= CURRENT_DATE) AS leiloes_abertos,
-               COALESCE(c.fob, 0) AS comex_export
+               COALESCE(c.fob, 0) AS comex_export,
+               -- leilões/vendas fora do PNCP (leiloes_bancos_etl.py): BB e União
+               COALESCE(o.leiloes_bb, 0) AS leiloes_bb,
+               COALESCE(o.vendas_bb, 0) AS vendas_bb,
+               COALESCE(o.leiloes_uniao, 0) AS leiloes_uniao
         FROM licitacoes l
         LEFT JOIN (SELECT uf, SUM(fob_usd) AS fob FROM comex_municipios
                    WHERE fluxo='export' GROUP BY uf) c ON c.uf = l.uf
+        LEFT JOIN (SELECT uf,
+                          COUNT(*) FILTER (WHERE fonte='bb' AND modalidade='leilao') AS leiloes_bb,
+                          COUNT(*) FILTER (WHERE fonte='bb' AND modalidade<>'leilao') AS vendas_bb,
+                          COUNT(*) FILTER (WHERE fonte='spu') AS leiloes_uniao
+                   FROM leiloes_outros WHERE ativo GROUP BY uf) o ON o.uf = l.uf
         WHERE l.uf IS NOT NULL AND l.uf != ''
-        GROUP BY l.uf, c.fob
+        GROUP BY l.uf, c.fob, o.leiloes_bb, o.vendas_bb, o.leiloes_uniao
     """)
 
     termos_alta = query("""

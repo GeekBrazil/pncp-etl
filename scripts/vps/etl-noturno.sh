@@ -17,6 +17,7 @@ ANO=$(date +%Y)
 
 # nome|período em dias|comando (dentro do container)
 FILA="contratos|7|python3 contratos_etl.py --dias 8
+leiloes_bancos|1|python3 leiloes_bancos_etl.py --importar
 comex_ano|7|python3 comex_etl.py --importar --ano $ANO
 radar|30|python3 radar_loteamento_etl.py --importar --ano-fim $((ANO-1))
 comex|30|python3 comex_etl.py --importar --ano $((ANO-1))
