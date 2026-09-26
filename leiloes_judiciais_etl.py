@@ -49,7 +49,7 @@ UFS = set("AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR 
 MESES = {"janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3, "abril": 4, "maio": 5, "junho": 6, "julho": 7,
          "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12}
 IMOVEL = re.compile(r"matr[íi]cula\s*(?:n[º°o.]*|sob)|\bim[óo]vel\b|\bterreno\b|apartamento|\bcasa\s+(?:residencial|de|t[ée]rrea|com)"
-                    r"|lote\s+(?:de\s+terreno|n[º°o.]|urbano)|gleba|fazenda|ch[áa]cara|s[íi]tio|sala\s+comercial|galp[ãa]o|pr[ée]dio"
+                    r"|lote\s+(?:de\s+terreno|n[º°o.]|urbano)|gleba|fazenda(?!\s+(?:p[úu]blica|nacional|estadual|municipal|do\s+estado|da\s+uni))|ch[áa]cara|s[íi]tio(?!\s+(?:d[ao]s?\s+leiloeir|eletr[ôo]nico|virtual|oficial|www|na\s+internet|do\s+tribunal|d[ao]\s+plataforma))|sala\s+comercial|galp[ãa]o|pr[ée]dio"
                     r"|unidade\s+aut[ôo]noma|fra[çc][ãa]o\s+ideal|vaga\s+de\s+garage", re.I)
 VEICULO = re.compile(r"ve[íi]culo|placa\s*[:\w]|chassi|renavam|motocicleta|caminh[ãa]o|autom[óo]vel|marca/modelo", re.I)
 MATRICULA = re.compile(r"matr[íi]cula\s*(?:n[º°o.]*|sob)", re.I)
@@ -67,8 +67,10 @@ def chave(s):
 
 
 def trecho_bem(t):
-    m = DESCR.search(t)
-    return t[m.start():m.start() + 1800] if m else ""
+    """Junta os trechos de descrição do bem (o primeiro "BENS:" costuma ser a
+    regra geral do leilão; a descrição de verdade vem depois)."""
+    partes = [t[m.start():m.start() + 1200] for m in list(DESCR.finditer(t))[:4]]
+    return " … ".join(partes)
 
 
 def eh_imovel(bem):
@@ -160,7 +162,7 @@ def cidade(item, t, bem, mun, uf_trib):
     """Cidade do imóvel, na ordem: 'Cidade/UF' no bem, 'Município de X', comarca, órgão."""
     for m in re.finditer(r"([A-ZÀ-Úa-zà-ú][A-Za-zÀ-ú' \-]{2,40}?)\s*[/\-–,]\s*([A-Z]{2})\b", bem):
         uf = m.group(2)
-        if uf in UFS:
+        if uf in UFS and (uf_trib is None or uf == uf_trib):
             nome = re.sub(r"^.*\b(?:de|em|na|no|cidade)\s+", "", m.group(1), flags=re.I) if len(m.group(1).split()) > 4 else m.group(1)
             for tent in (m.group(1), nome, " ".join(m.group(1).split()[-3:]), " ".join(m.group(1).split()[-2:]), m.group(1).split()[-1]):
                 r = mun.achar(tent, uf)
@@ -219,7 +221,7 @@ def processar(itens, mun):
         idx = f"{proc}:{ds[0].isoformat() if ds else it.get('data_disponibilizacao')}"
         tipo = None
         for rot, rx in (("apartamento", r"apartamento|flat"), ("casa", r"\bcasa\b"), ("terreno", r"terreno|\blote\b"),
-                        ("rural", r"fazenda|s[íi]tio|ch[áa]cara|gleba|rural"), ("comercial", r"sala comercial|galp[ãa]o|loja|pr[ée]dio"),
+                        ("rural", r"fazenda(?!\s+(?:p[úu]blica|nacional|estadual|municipal|do\s+estado|da\s+uni))|s[íi]tio(?!\s+(?:d[ao]s?\s+leiloeir|eletr[ôo]nico|virtual|oficial|www|na\s+internet|do\s+tribunal|d[ao]\s+plataforma))|ch[áa]cara|gleba|im[óo]vel\s+rural|propriedade\s+rural"), ("comercial", r"sala comercial|galp[ãa]o|loja|pr[ée]dio"),
                         ("garagem", r"vaga\s+de\s+garage")):
             if re.search(rx, bem, re.I):
                 tipo = rot
