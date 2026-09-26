@@ -123,8 +123,14 @@ def importar_tudo(exercicio: int, periodo: int):
     ultimo = get_progress(conn)
     if ultimo:
         idx = next((i for i, m in enumerate(municipios) if m["ibge"] == ultimo), -1)
-        municipios = municipios[idx + 1:]
-        print(f"  Retomando após {ultimo} — {len(municipios)} restantes.")
+        restantes = municipios[idx + 1:]
+        if restantes:
+            municipios = restantes
+            print(f"  Retomando após {ultimo} — {len(municipios)} restantes.")
+        else:
+            # volta anterior terminou: começa outra do zero, para tentar de novo
+            # os municípios que ainda não tinham publicado o RREO
+            print(f"  Volta anterior completa — recomeçando do início.")
 
     ok = erro = 0
     for i, m in enumerate(municipios, 1):
@@ -162,6 +168,10 @@ def importar_tudo(exercicio: int, periodo: int):
             erro += 1
             print(f"  ⚠ erro inesperado em {m['nome']}/{m['uf']}: {e}", file=sys.stderr)
 
+    # volta completa: zera o marcador para o próximo cron recomeçar
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM score_progress WHERE id = 1")
+    conn.commit()
     conn.close()
     print(f"\n🏁 Concluído: {ok} município(s) importados, {erro} com erro/sem dado.")
 

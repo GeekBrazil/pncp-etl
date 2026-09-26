@@ -10,7 +10,8 @@ avisar risco na consulta de CNPJ do site.
 - Auth: header `chave-api-dados` (env TRANSPARENCIA_API_KEY).
 - Limite: 90 req/min (06h–23h59). Usamos ~1.4 req/s com folga.
 - Resumível: sancoes_progress guarda a última página por cadastro; um redeploy
-  do Coolify não recomeça do zero (re-rodar retoma de onde parou).
+  do Coolify não recomeça do zero (re-rodar retoma de onde parou). Quando um
+  cadastro termina, a próxima execução (cron semanal) faz uma volta nova.
 
 Uso:
   python sancoes_etl.py                # todos os cadastros, resumindo
@@ -122,8 +123,13 @@ def carrega_cadastro(conn, cadastro):
     pagina = (row[0] if row else 0) + 1
     total  = row[2] if row else 0
     if row and row[1]:
-        log(f"{cadastro.upper()} já concluído ({total} registros) — pulando")
-        return
+        # carga anterior completa: nova volta desde a página 1 (o upsert atualiza
+        # data_fim e acrescenta as sanções novas; nada é apagado)
+        cur.execute("UPDATE sancoes_progress SET ultima_pagina=0, total_gravado=0, concluido=FALSE, "
+                    "atualizado_em=NOW() WHERE cadastro=%s", (cadastro.upper(),))
+        conn.commit()
+        pagina, total = 1, 0
+        log(f"{cadastro.upper()}: carga anterior completa — atualizando desde a página 1")
     if not row:
         cur.execute("INSERT INTO sancoes_progress (cadastro) VALUES (%s) ON CONFLICT DO NOTHING",
                     (cadastro.upper(),))

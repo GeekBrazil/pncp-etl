@@ -1884,12 +1884,27 @@ async def municipio_detalhe(ibge: str):
         raise HTTPException(status_code=404, detail="Município sem dados")
     radar = query("SELECT pop_inicial, pop_final, ano_inicial, ano_final, crescimento_pct, infra_valor_12m, score AS radar_score FROM radar_loteamento WHERE municipio_ibge = %s", (ibge,))
     agro = query("SELECT estabelecimentos FROM agro_municipios WHERE municipio_ibge = %s", (ibge,))
+    imob = None
+    if score:
+        # as tabelas de imobiliárias guardam a cidade por nome (a Receita grava
+        # sem acento: "Niteroi"), então o casamento é por nome sem acento + UF
+        nome, uf = score[0]["municipio_nome"], score[0]["uf"]
+        imob = query("""
+            SELECT (SELECT count(*) FROM leads_imobiliarias l JOIN empresas e ON e.cnpj = l.cnpj
+                    WHERE e.situacao_cadastral = '02' AND l.uf = %(uf)s
+                      AND unaccent(lower(l.cidade_alvo)) = unaccent(lower(%(nome)s))) AS registradas,
+                   (SELECT count(*) FROM imobiliarias i WHERE i.coletavel AND i.uf = %(uf)s
+                      AND unaccent(lower(i.cidade)) = unaccent(lower(%(nome)s))) AS com_site,
+                   (SELECT count(*) FROM imoveis_mercado a WHERE a.uf = %(uf)s
+                      AND unaccent(lower(a.cidade)) = unaccent(lower(%(nome)s))) AS anuncios
+        """, {"nome": nome, "uf": uf})[0]
     return {
         "score": score[0] if score else None,
         "licitacoes": lic[0] if lic else None,
         "top_licitacoes": top_lic,
         "radar": radar[0] if radar else None,
         "agro": agro[0] if agro else None,
+        "imobiliarias": imob,
     }
 
 @app.get("/score-municipios/stats", dependencies=[Depends(verify_api_key_or_admin)])
