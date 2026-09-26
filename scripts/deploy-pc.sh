@@ -87,9 +87,35 @@ echo (stripos(\$d->logs ?? \"\", \"Build step skipped\") !== false) ? \"SKIP_OK\
 if [ "$SKIPPED" = "SKIP_OK" ]; then echo "    ✅ Coolify usou a imagem do PC (Build step skipped)."
 else echo "    ⚠️ Não achei 'Build step skipped' no log do deploy $DEP_ID — conferir se o VPS compilou."; fi
 
+echo "    Atualizando a rota da API que o site usa (sslip.io → container novo)..."
+# O site (allancandido.com) chama a API pelo endereço sslip.io, sem o login do
+# Cloudflare Access que protege painel.allancandido.com. O Coolify só gera a
+# rota do painel, então esta rota fica num arquivo dinâmico do Traefik e
+# precisa seguir o container novo a cada deploy (incidente de 2026-09-25: o
+# site ficou sem dados depois de um redeploy).
+ssh "$VPS" 'NOVO=$(docker ps --filter name='"$APP_UUID"' --format "{{.CreatedAt}}|{{.Names}}" | sort -r | head -1 | cut -d"|" -f2)
+cat > /data/coolify/proxy/dynamic/pncp-api.yaml <<EOF2
+http:
+  routers:
+    pncp-api-sslip:
+      rule: "Host(\`'"$APP_UUID"'.188.245.70.109.sslip.io\`)"
+      entryPoints:
+        - http
+      service: pncp-api-service
+  services:
+    pncp-api-service:
+      loadBalancer:
+        servers:
+          - url: "http://${NOVO}:8790"
+EOF2
+echo "    rota → $NOVO"'
+
 echo "==> [5/6] Verificando produção..."
 sleep 4
 CODIGO=$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://painel.allancandido.com/")
+API=$(curl -s -o /dev/null -m 20 -w "%{http_code}" "http://$APP_UUID.188.245.70.109.sslip.io/kpis" || true)
+echo "    API para o site (sslip.io, sem chave) → $API (esperado 401/403; 404 = rota quebrada)"
+[ "$API" = "404" ] && { echo "❌ O site ficou sem a API (rota sslip.io)"; exit 1; }
 echo "    https://painel.allancandido.com/ → $CODIGO"
 case "$CODIGO" in 2*|3*) ;; *) echo "❌ Produção respondeu $CODIGO"; exit 1;; esac
 
