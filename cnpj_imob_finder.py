@@ -19,6 +19,8 @@ Uso:
     UFS_ALVO=RJ,SP python3 cnpj_imob_finder.py    # estados específicos
     UFS_ALVO=ALL python3 cnpj_imob_finder.py      # Brasil inteiro
     python3 cnpj_imob_finder.py --avisar          # lista/marca leads novos
+    python3 cnpj_imob_finder.py --se-novo         # só roda se a Receita publicou pasta nova
+                                                  # (pro timer noturno: sem isso baixaria ~13 GB toda noite)
 """
 import csv
 import io
@@ -160,10 +162,17 @@ def _processar_zip(caminho_zip, conn):
     return achados
 
 
-def rodar():
+MARCADOR = os.path.join(TMP_DIR, "ultima_pasta_processada")
+
+
+def rodar(se_novo=False):
     os.makedirs(TMP_DIR, exist_ok=True)
     pasta = _pasta_mais_recente()
     alvo = "Brasil inteiro" if UFS_ALVO is None else "/".join(sorted(UFS_ALVO))
+    marca = f"{pasta} {alvo}"
+    if se_novo and os.path.exists(MARCADOR) and open(MARCADOR).read().strip() == marca:
+        print(f"[cnpj_imob_finder] pasta {pasta} ({alvo}) já processada — nada novo na Receita")
+        return
     print(f"[cnpj_imob_finder] pasta {pasta} · alvo: {alvo}")
     _carregar_municipios(pasta)
     conn = psycopg2.connect(DATABASE_URL)
@@ -178,6 +187,8 @@ def rodar():
         total += achados
         print(f"  Estabelecimentos{i}.zip: {achados} lead(s) — total {total}")
     conn.close()
+    with open(MARCADOR, "w") as f:
+        f.write(marca)
     print(f"\n🏁 total de leads ({alvo}, CNAE corretagem imobiliária): {total}")
 
 
@@ -209,4 +220,4 @@ if __name__ == "__main__":
         avisar(conn)
         conn.close()
     else:
-        rodar()
+        rodar(se_novo="--se-novo" in sys.argv)
