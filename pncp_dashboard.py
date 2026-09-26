@@ -1741,6 +1741,37 @@ _MERCADO_COLS = f"""
     mk.anuncios_venda, mk.anuncios_aluguel"""
 
 
+@app.get("/mercado/comparaveis", dependencies=[Depends(verify_api_key_or_admin)])
+async def mercado_comparaveis(cidade: str, uf: str = None, quartos_min: int = 0, bairro: str = None):
+    """Comparáveis de um imóvel para o bloco "Por que comprar" da página do
+    imóvel: anúncios de venda na mesma cidade com pelo menos N quartos (180
+    dias). Devolve contagem, mediana, mínimo e o R$/m² — e, com amostra, o do
+    bairro. Nada é estimado: sem anúncios, os campos vêm nulos."""
+    filtro_uf, params = "", [cidade]
+    if uf:
+        filtro_uf = " AND uf = %s"; params.append(uf.upper())
+    base = f"""FROM imoveis_mercado WHERE unaccent(lower(cidade)) = unaccent(lower(%s)){filtro_uf}
+               AND finalidade = 'venda' AND preco >= 50000
+               AND coletado_em > NOW() - interval '{MERCADO_JANELA_DIAS} days'"""
+    parecidos = query(f"""SELECT count(*) AS anuncios,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY preco)::numeric) AS preco_mediano,
+               round(percentile_cont(0.25) WITHIN GROUP (ORDER BY preco)::numeric) AS preco_p25,
+               min(preco) AS preco_min,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY area)::numeric) AS area_mediana
+        {base} AND quartos >= %s""", params + [quartos_min])[0]
+    cidade_m2 = query(f"""SELECT count(*) AS anuncios,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2)::numeric) AS m2_mediano
+        {base} AND preco_m2 BETWEEN 300 AND 60000 AND tipo IS DISTINCT FROM 'terreno'""", params)[0]
+    bairro_m2 = None
+    if bairro:
+        b = query(f"""SELECT count(*) AS anuncios,
+               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2)::numeric) AS m2_mediano
+            {base} AND unaccent(lower(bairro)) LIKE unaccent(lower(%s)) || '%%'
+            AND preco_m2 BETWEEN 300 AND 60000 AND tipo IS DISTINCT FROM 'terreno'""", params + [bairro])[0]
+        bairro_m2 = b if b["anuncios"] >= 5 else None
+    return {"quartos_min": quartos_min, "parecidos": parecidos, "cidade_m2": cidade_m2, "bairro_m2": bairro_m2}
+
+
 @app.get("/radar-loteamentos", dependencies=[Depends(verify_api_key_or_admin)])
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
