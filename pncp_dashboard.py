@@ -1231,6 +1231,33 @@ async def score_municipios_lista(
     sql += " ORDER BY receita_per_capita DESC NULLS LAST LIMIT %s"; params.append(limit)
     return query(sql, params)
 
+@app.get("/radar-cnpj/heatmap", dependencies=[Depends(verify_api_key_or_admin)])
+async def radar_cnpj_heatmap(uf: str = None, categoria: str = None):
+    """Mapa de calor do Radar CNPJ: empresas ativas + aberturas recentes por
+    município. `categoria='__total__'` (default se omitido) dá o baseline de
+    densidade geral; passe uma categoria de categorias_cnae (ex: restaurante,
+    pousada) pra filtrar. Fonte: tabela radar_cnpj_heatmap, agregada localmente
+    a partir da base nacional de CNPJ e sincronizada por radar_cnpj_heatmap.py
+    (ver pncp-etl/radar_cnpj_heatmap.py — roda no notebook, não na VPS)."""
+    sql = "SELECT municipio, uf, categoria, ativas, novas_12m, novas_90d, atualizado_em FROM radar_cnpj_heatmap WHERE categoria = %s"
+    params = [categoria or "__total__"]
+    if uf:
+        sql += " AND uf = %s"; params.append(uf.upper())
+    sql += " ORDER BY ativas DESC"
+    return query(sql, params)
+
+@app.get("/radar-cnpj/categorias", dependencies=[Depends(verify_api_key_or_admin)])
+async def radar_cnpj_categorias():
+    """Lista as categorias disponíveis no mapa de calor, com total nacional de
+    cada uma — pra montar o seletor de camada no front do Radar CNPJ."""
+    return query("""
+        SELECT categoria, sum(ativas) AS ativas, sum(novas_12m) AS novas_12m
+        FROM radar_cnpj_heatmap
+        WHERE categoria != '__total__'
+        GROUP BY categoria
+        ORDER BY ativas DESC
+    """)
+
 # ─── Emprego formal (Novo CAGED) — tabela caged_agregado / visão caged_municipios,
 #     carregada por caged_etl.py (roda no notebook, grava pelo túnel) ────────────
 SECOES_CNAE = {
