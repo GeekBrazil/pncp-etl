@@ -1,0 +1,10 @@
+[Unit]
+Description=Todo dia: atualiza os leilões dos bancos privados (roda do PC — a API do Bradesco recusa IP de datacenter)
+
+[Timer]
+OnCalendar=*-*-* 04:20
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

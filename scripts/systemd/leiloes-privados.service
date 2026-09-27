@@ -1,0 +1,11 @@
+[Unit]
+Description=Leilões extrajudiciais de bancos privados (Bradesco, Santander, Itaú) → leiloes_outros
+After=pncp-tunnel.service network-online.target
+Wants=pncp-tunnel.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/allan/pncp-etl
+ExecStart=/bin/bash -c 'DATABASE_URL="$(cat /home/allan/.config/pncp/database_url)" exec /home/allan/pncp-etl/pncpvenv/bin/python leiloes_privados_etl.py --importar'
+Nice=10
+TimeoutStartSec=1800
