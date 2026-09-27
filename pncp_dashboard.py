@@ -1779,7 +1779,7 @@ async def leiloes_outros(fonte: str = None, uf: str = None, municipios: str = No
     pagos do site: `desde` (ISO) devolve só o que apareceu depois disso;
     `uf` e `municipios` aceitam listas separadas por vírgula (IBGE)."""
     sql = """SELECT fonte, id_externo, uf, cidade, municipio_ibge, tipo, modalidade, valor,
-                    data_sessao, url, origem, publicado, primeiro_visto
+                    data_sessao, url, origem, publicado, primeiro_visto, preco, desconto_pct, area_m2, bairro
              FROM leiloes_outros WHERE TRUE"""
     p: list = []
     if ativos:
@@ -1936,7 +1936,9 @@ async def dashboard_live(uf: str = None):
                COALESCE(o.leiloes_bb, 0) AS leiloes_bb,
                COALESCE(o.vendas_bb, 0) AS vendas_bb,
                COALESCE(o.leiloes_uniao, 0) AS leiloes_uniao,
-               COALESCE(o.leiloes_judiciais, 0) AS leiloes_judiciais
+               COALESCE(o.leiloes_judiciais, 0) AS leiloes_judiciais,
+               COALESCE(o.leiloes_caixa, 0) AS leiloes_caixa,
+               COALESCE(o.vendas_caixa, 0) AS vendas_caixa
         FROM licitacoes l
         LEFT JOIN (SELECT uf, SUM(fob_usd) AS fob FROM comex_municipios
                    WHERE fluxo='export' GROUP BY uf) c ON c.uf = l.uf
@@ -1944,10 +1946,12 @@ async def dashboard_live(uf: str = None):
                           COUNT(*) FILTER (WHERE fonte='bb' AND modalidade='leilao') AS leiloes_bb,
                           COUNT(*) FILTER (WHERE fonte='bb' AND modalidade<>'leilao') AS vendas_bb,
                           COUNT(*) FILTER (WHERE fonte='spu') AS leiloes_uniao,
-                          COUNT(*) FILTER (WHERE fonte='judicial') AS leiloes_judiciais
+                          COUNT(*) FILTER (WHERE fonte='judicial') AS leiloes_judiciais,
+                          COUNT(*) FILTER (WHERE fonte='caixa' AND modalidade='leilao') AS leiloes_caixa,
+                          COUNT(*) FILTER (WHERE fonte='caixa' AND modalidade<>'leilao') AS vendas_caixa
                    FROM leiloes_outros WHERE ativo GROUP BY uf) o ON o.uf = l.uf
         WHERE l.uf IS NOT NULL AND l.uf != ''
-        GROUP BY l.uf, c.fob, o.leiloes_bb, o.vendas_bb, o.leiloes_uniao, o.leiloes_judiciais
+        GROUP BY l.uf, c.fob, o.leiloes_bb, o.vendas_bb, o.leiloes_uniao, o.leiloes_judiciais, o.leiloes_caixa, o.vendas_caixa
     """)
 
     termos_alta = query("""
