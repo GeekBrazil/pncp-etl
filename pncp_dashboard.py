@@ -1938,7 +1938,8 @@ async def dashboard_live(uf: str = None):
                COALESCE(o.leiloes_uniao, 0) AS leiloes_uniao,
                COALESCE(o.leiloes_judiciais, 0) AS leiloes_judiciais,
                COALESCE(o.leiloes_caixa, 0) AS leiloes_caixa,
-               COALESCE(o.vendas_caixa, 0) AS vendas_caixa
+               COALESCE(o.vendas_caixa, 0) AS vendas_caixa,
+               COALESCE(o.leiloes_privados, 0) AS leiloes_privados
         FROM licitacoes l
         LEFT JOIN (SELECT uf, SUM(fob_usd) AS fob FROM comex_municipios
                    WHERE fluxo='export' GROUP BY uf) c ON c.uf = l.uf
@@ -1948,10 +1949,11 @@ async def dashboard_live(uf: str = None):
                           COUNT(*) FILTER (WHERE fonte='spu') AS leiloes_uniao,
                           COUNT(*) FILTER (WHERE fonte='judicial') AS leiloes_judiciais,
                           COUNT(*) FILTER (WHERE fonte='caixa' AND modalidade='leilao') AS leiloes_caixa,
-                          COUNT(*) FILTER (WHERE fonte='caixa' AND modalidade<>'leilao') AS vendas_caixa
+                          COUNT(*) FILTER (WHERE fonte='caixa' AND modalidade<>'leilao') AS vendas_caixa,
+                          COUNT(*) FILTER (WHERE fonte IN ('bradesco','santander','itau')) AS leiloes_privados
                    FROM leiloes_outros WHERE ativo GROUP BY uf) o ON o.uf = l.uf
         WHERE l.uf IS NOT NULL AND l.uf != ''
-        GROUP BY l.uf, c.fob, o.leiloes_bb, o.vendas_bb, o.leiloes_uniao, o.leiloes_judiciais, o.leiloes_caixa, o.vendas_caixa
+        GROUP BY l.uf, c.fob, o.leiloes_bb, o.vendas_bb, o.leiloes_uniao, o.leiloes_judiciais, o.leiloes_caixa, o.vendas_caixa, o.leiloes_privados
     """)
 
     termos_alta = query("""
