@@ -1,0 +1,12 @@
+[Unit]
+Description=Caixa — importa Lista_imoveis_*.csv baixada em ~/Downloads (leilões e vendas da Caixa)
+After=pncp-tunnel.service
+Wants=pncp-tunnel.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/allan/pncp-etl
+# espera o navegador terminar de gravar
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/bash -c 'DATABASE_URL="$(cat /home/allan/.config/pncp/database_url)" exec /home/allan/pncp-etl/pncpvenv/bin/python caixa_importar.py'
+Nice=10

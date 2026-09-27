@@ -1,0 +1,9 @@
+[Unit]
+Description=Vigia ~/Downloads: lista de imóveis da Caixa baixada → importa sozinho
+
+[Path]
+PathExistsGlob=/home/allan/Downloads/Lista_imoveis*.csv
+Unit=caixa-importar.service
+
+[Install]
+WantedBy=default.target
