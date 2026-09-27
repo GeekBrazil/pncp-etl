@@ -150,6 +150,8 @@ def importar(conn, caminho, mun):
         uf = l["uf"].upper()[:2]
         tipo, area = tipo_e_area(l["descricao"])
         m = mun.get((uf, norm(l["cidade"])))
+        if not m and uf == "DF":  # Ceilândia, Taguatinga… são regiões administrativas de Brasília
+            m = mun.get(("DF", "brasilia"))
         so_num = re.sub(r"\D", "", l["id"])
         link = l["link"] or f"https://venda-imoveis.caixa.gov.br/sistema/detalhe-imovel.asp?hdnimovel={so_num}"
         regs.append({
