@@ -1297,6 +1297,57 @@ async def caged_municipio(ibge: int, meses: int = 12):
     }
     return {"municipio_ibge": ibge, "serie": list(reversed(serie)), "periodo": periodo, "setores": setores}
 
+@app.get("/relatorio-cidade/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def relatorio_cidade(ibge: str):
+    """Relatório público da cidade (jobpago.com.br/cidade/{ibge}): quem está abrindo
+    negócio (Receita, radar_cnpj_heatmap — casado pelo nome sem acento + UF), quanto
+    se paga para começar em cada setor (salário médio de admissão do Novo CAGED,
+    últimos 12 meses completos) e compras públicas abertas de valor pequeno (PNCP)."""
+    if not ibge.isdigit() or len(ibge) != 7:
+        raise HTTPException(status_code=400, detail="IBGE deve ter 7 dígitos")
+    mun = query("""SELECT municipio_ibge, municipio_nome, uf, populacao FROM score_municipios
+                   WHERE municipio_ibge = %s ORDER BY exercicio DESC, periodo DESC LIMIT 1""", (ibge,))
+    if not mun:
+        raise HTTPException(status_code=404, detail="Município não encontrado")
+    m = mun[0]
+    negocios = query("""SELECT categoria, ativas, novas_12m, novas_90d, atualizado_em FROM radar_cnpj_heatmap
+        WHERE uf = %s AND lower(unaccent(municipio)) = lower(unaccent(%s))
+        ORDER BY novas_90d DESC NULLS LAST""", (m["uf"], m["municipio_nome"]))
+    total = next((n for n in negocios if n["categoria"] == "__total__"), None)
+    categorias = [n for n in negocios if n["categoria"] != "__total__"]
+    cod = int(ibge)
+    comps = query("SELECT competencia FROM caged_meses_completos ORDER BY competencia DESC LIMIT 12")
+    emprego = None
+    if comps:
+        c = [r["competencia"] for r in comps]
+        setores = query("""
+            SELECT secao, SUM(admissoes) AS admissoes, SUM(desligamentos) AS desligamentos, SUM(saldo) AS saldo,
+                   ROUND(SUM(salario_medio_adm * GREATEST(admissoes, 0)) / NULLIF(SUM(GREATEST(admissoes, 0)), 0), 2) AS salario_medio_adm
+            FROM caged_municipios WHERE municipio_ibge = %s AND competencia BETWEEN %s AND %s
+            GROUP BY secao HAVING SUM(admissoes) > 0 ORDER BY SUM(admissoes) DESC""", [cod, min(c), max(c)])
+        for r in setores:
+            r["setor"] = SECOES_CNAE.get(r["secao"], r["secao"])
+        adm = sum(r["admissoes"] or 0 for r in setores)
+        sal = sum((r["salario_medio_adm"] or 0) * (r["admissoes"] or 0) for r in setores)
+        emprego = {
+            "de": min(c), "ate": max(c), "admissoes": adm,
+            "desligamentos": sum(r["desligamentos"] or 0 for r in setores),
+            "saldo": sum(r["saldo"] or 0 for r in setores),
+            "salario_medio_adm": round(sal / adm, 2) if adm else None,
+            "setores": setores,
+        }
+    compras = query("""
+        SELECT objeto, orgao_nome, valor_estimado, modalidade_nome, data_encerramento, url_pncp
+        FROM licitacoes WHERE municipio_ibge = %s AND data_encerramento >= CURRENT_DATE
+          AND valor_estimado > 0 AND valor_estimado <= 300000
+        ORDER BY data_encerramento LIMIT 8""", (ibge,))
+    abertas = query("""SELECT COUNT(*) AS n FROM licitacoes WHERE municipio_ibge = %s AND data_encerramento >= CURRENT_DATE""", (ibge,))
+    return {
+        "municipio": m, "negocios_total": total, "categorias": categorias,
+        "emprego": emprego, "compras_pequenas": compras, "compras_abertas": abertas[0]["n"] if abertas else 0,
+    }
+
+
 @app.get("/caged/ranking", dependencies=[Depends(verify_api_key_or_admin)])
 async def caged_ranking(uf: int = None, meses: int = 12, limit: int = 50):
     """Municípios que mais geraram emprego formal nos últimos `meses` (saldo),
