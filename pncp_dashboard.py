@@ -1830,6 +1830,47 @@ async def mercado_comparaveis(cidade: str, uf: str = None, quartos_min: int = 0,
     return {"quartos_min": quartos_min, "parecidos": parecidos, "cidade_m2": cidade_m2, "bairro_m2": bairro_m2}
 
 
+@app.get("/compras-abertas", dependencies=[Depends(verify_api_key_or_admin)])
+async def compras_abertas(municipios: str = None, uf: str = None, desde: str = None, valor_max: float = None, limit: int = 300):
+    """Compras públicas (PNCP) com prazo aberto, por município (IBGE, vírgula) ou UF.
+    `desde` (ISO) = só as importadas depois disso — é o que vira aviso diário do
+    plano "Compras públicas da cidade" (allancandido.com). Sem município nem UF, recusa."""
+    muns = [m for m in (municipios or "").split(",") if m.strip().isdigit() and len(m.strip()) == 7][:50]
+    ufs = [u.strip().upper() for u in (uf or "").split(",") if len(u.strip()) == 2][:27]
+    if not muns and not ufs:
+        raise HTTPException(status_code=400, detail="informe municipios ou uf")
+    sql = """SELECT pncp_id, municipio_ibge, municipio_nome, uf, orgao_nome, objeto, valor_estimado, modalidade_nome,
+                    data_publicacao, data_encerramento, url_pncp
+             FROM licitacoes WHERE data_encerramento >= CURRENT_DATE"""
+    params = []
+    if muns:
+        sql += " AND municipio_ibge = ANY(%s)"; params.append(muns)
+    else:
+        sql += " AND uf = ANY(%s)"; params.append(ufs)
+    if desde:
+        sql += " AND importado_em >= %s"; params.append(desde)
+    if valor_max:
+        sql += " AND (valor_estimado IS NULL OR valor_estimado <= %s)"; params.append(valor_max)
+    sql += " ORDER BY data_publicacao DESC NULLS LAST, data_encerramento LIMIT %s"; params.append(max(1, min(limit, 1000)))
+    return query(sql, params)
+
+
+@app.get("/compras-abertas/contagem", dependencies=[Depends(verify_api_key_or_admin)])
+async def compras_abertas_contagem(municipios: str = None, uf: str = None):
+    """Só os números (grátis): quantas compras abertas, soma estimada, quantas de até R$ 300 mil."""
+    muns = [m for m in (municipios or "").split(",") if m.strip().isdigit() and len(m.strip()) == 7][:50]
+    ufs = [u.strip().upper() for u in (uf or "").split(",") if len(u.strip()) == 2][:27]
+    if not muns and not ufs:
+        raise HTTPException(status_code=400, detail="informe municipios ou uf")
+    filtro, p = ("municipio_ibge = ANY(%s)", [muns]) if muns else ("uf = ANY(%s)", [ufs])
+    r = query(f"""SELECT COUNT(*) AS abertas,
+                         SUM(valor_estimado) FILTER (WHERE valor_estimado <= 500000000) AS valor_total,
+                         COUNT(*) FILTER (WHERE valor_estimado > 0 AND valor_estimado <= 300000) AS pequenas,
+                         MIN(data_encerramento) AS proximo_prazo
+                  FROM licitacoes WHERE data_encerramento >= CURRENT_DATE AND {filtro}""", p)
+    return r[0] if r else {"abertas": 0}
+
+
 @app.get("/leiloes-outros", dependencies=[Depends(verify_api_key_or_admin)])
 async def leiloes_outros(fonte: str = None, uf: str = None, municipios: str = None, desde: str = None,
                          ativos: bool = True, limit: int = 500):
