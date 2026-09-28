@@ -1310,9 +1310,16 @@ async def relatorio_cidade(ibge: str):
     if not mun:
         raise HTTPException(status_code=404, detail="Município não encontrado")
     m = mun[0]
+    # o radar grava o nome da Receita (sem acento, às vezes grafia antiga: "Parati"); casa pelo
+    # nome sem acento e, se não bater, pelo mais parecido da mesma UF (pg_trgm, similaridade ≥ 0,55)
+    nome_radar = query("""SELECT municipio FROM radar_cnpj_heatmap WHERE uf = %s AND categoria = '__total__'
+        AND similarity(lower(unaccent(municipio)), lower(unaccent(%s))) >= 0.55
+        ORDER BY (lower(unaccent(municipio)) = lower(unaccent(%s))) DESC,
+                 similarity(lower(unaccent(municipio)), lower(unaccent(%s))) DESC LIMIT 1""",
+        (m["uf"], m["municipio_nome"], m["municipio_nome"], m["municipio_nome"]))
     negocios = query("""SELECT categoria, ativas, novas_12m, novas_90d, atualizado_em FROM radar_cnpj_heatmap
-        WHERE uf = %s AND lower(unaccent(municipio)) = lower(unaccent(%s))
-        ORDER BY novas_90d DESC NULLS LAST""", (m["uf"], m["municipio_nome"]))
+        WHERE uf = %s AND municipio = %s ORDER BY novas_90d DESC NULLS LAST""",
+        (m["uf"], nome_radar[0]["municipio"])) if nome_radar else []
     total = next((n for n in negocios if n["categoria"] == "__total__"), None)
     categorias = [n for n in negocios if n["categoria"] != "__total__"]
     cod = int(ibge)
@@ -1339,7 +1346,7 @@ async def relatorio_cidade(ibge: str):
     compras = query("""
         SELECT objeto, orgao_nome, valor_estimado, modalidade_nome, data_encerramento, url_pncp
         FROM licitacoes WHERE municipio_ibge = %s AND data_encerramento >= CURRENT_DATE
-          AND valor_estimado > 0 AND valor_estimado <= 300000
+          AND valor_estimado >= 1000 AND valor_estimado <= 300000
         ORDER BY data_encerramento LIMIT 8""", (ibge,))
     abertas = query("""SELECT COUNT(*) AS n FROM licitacoes WHERE municipio_ibge = %s AND data_encerramento >= CURRENT_DATE""", (ibge,))
     return {
