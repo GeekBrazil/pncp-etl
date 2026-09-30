@@ -18,6 +18,7 @@ Uso:
 import argparse
 import os
 import re
+import unicodedata
 import time
 
 import psycopg2
@@ -46,6 +47,10 @@ def _extrair_cards(page):
             texto: el.innerText || '',
         }))""",
     )
+
+
+def _sem_acento(t):
+    return unicodedata.normalize("NFD", t).encode("ascii", "ignore").decode().strip().lower()
 
 
 def _parse_card(c, cidade_default, uf):
@@ -77,6 +82,14 @@ def _parse_card(c, cidade_default, uf):
         bairro, cidade = partes[-2], partes[-1]
     elif partes:
         cidade = partes[-1]
+    # A busca já é por cidade (URL uf+cidade). Título fora do padrão gravava
+    # pedaço de endereço como cidade ("AGUIAR DIMINIC B3 09"): com a cidade da
+    # busca em mãos, ela vale; o bairro só é aproveitado se o título terminar
+    # na própria cidade.
+    if cidade_default:
+        if _sem_acento(cidade or "") != _sem_acento(cidade_default):
+            bairro = None
+        cidade = cidade_default
 
     preco_m2 = round(preco / area, 2) if preco and area else None
     return {

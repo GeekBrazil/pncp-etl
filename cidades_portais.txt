@@ -2,6 +2,12 @@
 # Formato: uf|cidade_bonita|regiao_olx|cidade_slug_zap
 # regiao_olx: o "bairro de região" que o OLX usa (ver URL ao navegar manualmente).
 # cidade_slug_zap: o pedaço depois de "uf+" na URL do Zap (zapimoveis.com.br/venda/imoveis/rj+<slug>/).
-RJ|Angra dos Reis|serra-angra-dos-reis-e-regiao|angra-dos-reis
+# Região OLX sem a cidade no fim ("serra-angra-dos-reis-e-regiao") devolve a região
+# inteira (Petrópolis, Volta Redonda…) e quase nada da cidade — sempre região/cidade.
+# O slug da cidade no OLX nem sempre é o nome: Paraty = "parati"; Mangaratiba fica
+# na região do Rio. Conferir abrindo a URL antes de acrescentar cidade nova.
+RJ|Angra dos Reis|serra-angra-dos-reis-e-regiao/angra-dos-reis|angra-dos-reis
+RJ|Paraty|serra-angra-dos-reis-e-regiao/parati|paraty
+RJ|Mangaratiba|rio-de-janeiro-e-regiao/mangaratiba|mangaratiba
 RJ|Rio das Ostras|norte-do-estado-do-rio/rio-das-ostras|rio-das-ostras
 RJ|Araruama|norte-do-estado-do-rio/araruama|araruama

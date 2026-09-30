@@ -1,0 +1,15 @@
+[Unit]
+Description=Coletor de anúncios dos portais (OLX + Zap) nas cidades de cidades_portais.txt — alimenta preço do m², aluguel e o termômetro
+After=pncp-tunnel.service network-online.target
+Wants=pncp-tunnel.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/allan/pncp-etl
+# devagar de propósito: pausa entre rodadas e 3 páginas por cidade/finalidade
+Environment=PAUSA_ENTRE_RODADAS=60
+Environment=PAGINAS=3
+ExecStart=/home/allan/pncp-etl/rodar_portais.sh
+StandardOutput=append:/home/allan/.cache/portais-imob.log
+StandardError=append:/home/allan/.cache/portais-imob.log
+Nice=10
