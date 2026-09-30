@@ -24,6 +24,8 @@ import psycopg2
 import psycopg2.extras
 from playwright.sync_api import sync_playwright
 
+from espelho import espelhar, rolar
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/pncp_db")
 PAUSA_PAGINA = float(os.environ.get("OLX_PAUSA", "3.0"))  # gentil entre páginas de listagem
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
@@ -70,6 +72,55 @@ def _extrair_cards(page):
     )
 
 
+def gravar_cards_olx(cur, cards, finalidade, uf, cidade=None):
+    """Grava os cards de uma página da listagem OLX em imoveis_mercado. Usado pelo
+    robô (coletar_olx) e pela coleta manual (coleta_manual.py)."""
+    n = 0
+    for c in cards:
+        if not c["href"] or not c["preco_txt"]:
+            continue
+        preco = None
+        digs = re.sub(r"[^\d]", "", c["preco_txt"])
+        if digs:
+            preco = float(digs)
+        # "Rio das Ostras, Costazul" ou "Rio das Ostras - RJ"
+        loc = re.sub(r"\s+-\s+[A-Z]{2}\s*$", "", (c["loc_txt"] or "").strip())
+        partes = [x.strip() for x in loc.split(",") if x.strip()]
+        cidade_card = partes[0] if partes else cidade
+        bairro = partes[1] if len(partes) > 1 else None
+        area = quartos = banheiros = None
+        for d in c["details"] or []:
+            if not d:
+                continue
+            dl = d.lower()
+            if "metro" in dl:
+                area = _num(d)
+            elif "quarto" in dl:
+                quartos = _num(d)
+            elif "banheiro" in dl:
+                banheiros = _num(d)
+        if area is None:  # sem o detalhe, o título costuma trazer "210 m²"
+            mt = re.search(r"(\d[\d.]*)\s*m[²2]", c["titulo"] or "")
+            area = _num(mt.group(1).replace(".", "")) if mt else None
+        preco_m2 = round(preco / area, 2) if preco and area else None
+        anunciante_tipo = "proprietario" if c["dono"] else None
+        tipo = _tipo_do_titulo(c["titulo"] or "")
+        cur.execute(
+            """INSERT INTO imoveis_mercado
+                (fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos,
+                 bairro, cidade, uf, url, titulo, anunciante_tipo)
+               VALUES ('olx.com.br', 'portal', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (url) DO UPDATE SET
+                   preco=EXCLUDED.preco, area=EXCLUDED.area, preco_m2=EXCLUDED.preco_m2,
+                   quartos=EXCLUDED.quartos, anunciante_tipo=EXCLUDED.anunciante_tipo,
+                   coletado_em=NOW()""",
+            (finalidade, tipo, preco, area, preco_m2, quartos, bairro,
+             cidade_card or cidade, uf, c["href"], c["titulo"], anunciante_tipo),
+        )
+        n += 1
+    return n
+
+
 def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, sort_recente=True, visivel=False):
     """Percorre N páginas da listagem OLX de uma região e grava em imoveis_mercado.
 
@@ -93,6 +144,7 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
                 # anúncio por corrida (visto na prática: 5/50 virou 50/50 só com isso).
                 page.wait_for_selector(".olx-adcard__price", timeout=10000)
                 page.wait_for_timeout(800)
+                rolar(page, f"OLX {regiao} · {finalidade} · página {pagina}")
             except Exception as e:
                 print(f"[olx] falha ao abrir {url}: {e}")
                 break
@@ -100,48 +152,7 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
             if not cards:
                 print(f"[olx] página {pagina}: sem cards, parando (região pode não existir ou fim da lista)")
                 break
-            for c in cards:
-                if not c["href"] or not c["preco_txt"]:
-                    continue
-                preco = None
-                digs = re.sub(r"[^\d]", "", c["preco_txt"])
-                if digs:
-                    preco = float(digs)
-                # "Rio das Ostras, Costazul" ou "Rio das Ostras - RJ"
-                loc = re.sub(r"\s+-\s+[A-Z]{2}\s*$", "", (c["loc_txt"] or "").strip())
-                partes = [x.strip() for x in loc.split(",") if x.strip()]
-                cidade_card = partes[0] if partes else cidade
-                bairro = partes[1] if len(partes) > 1 else None
-                area = quartos = banheiros = None
-                for d in c["details"] or []:
-                    if not d:
-                        continue
-                    dl = d.lower()
-                    if "metro" in dl:
-                        area = _num(d)
-                    elif "quarto" in dl:
-                        quartos = _num(d)
-                    elif "banheiro" in dl:
-                        banheiros = _num(d)
-                if area is None:  # sem o detalhe, o título costuma trazer "210 m²"
-                    mt = re.search(r"(\d[\d.]*)\s*m[²2]", c["titulo"] or "")
-                    area = _num(mt.group(1).replace(".", "")) if mt else None
-                preco_m2 = round(preco / area, 2) if preco and area else None
-                anunciante_tipo = "proprietario" if c["dono"] else None
-                tipo = _tipo_do_titulo(c["titulo"] or "")
-                cur.execute(
-                    """INSERT INTO imoveis_mercado
-                        (fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos,
-                         bairro, cidade, uf, url, titulo, anunciante_tipo)
-                       VALUES ('olx.com.br', 'portal', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (url) DO UPDATE SET
-                           preco=EXCLUDED.preco, area=EXCLUDED.area, preco_m2=EXCLUDED.preco_m2,
-                           quartos=EXCLUDED.quartos, anunciante_tipo=EXCLUDED.anunciante_tipo,
-                           coletado_em=NOW()""",
-                    (finalidade, tipo, preco, area, preco_m2, quartos, bairro,
-                     cidade_card or cidade, uf, c["href"], c["titulo"], anunciante_tipo),
-                )
-                gravados += 1
+            gravados += gravar_cards_olx(cur, cards, finalidade, uf, cidade)
             conn.commit()
             print(f"[olx] {regiao}/{finalidade} página {pagina}: {len(cards)} cards, {gravados} gravados até aqui")
             time.sleep(PAUSA_PAGINA)

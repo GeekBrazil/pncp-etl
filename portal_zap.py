@@ -25,6 +25,8 @@ import psycopg2
 import psycopg2.extras
 from playwright.sync_api import sync_playwright
 
+from espelho import espelhar, rolar
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/pncp_db")
 PAUSA_PAGINA = float(os.environ.get("ZAP_PAUSA", "4.0"))
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
@@ -99,6 +101,33 @@ def _parse_card(c, cidade_default, uf):
     }
 
 
+def gravar_cards_zap(cur, cards, finalidade, uf, cidade=None):
+    """Grava os cards de uma página do Zap em imoveis_mercado. Usado pelo robô
+    (coletar_zap) e pela coleta manual (coleta_manual.py)."""
+    n = 0
+    # o link do card traz ?source=ranking,… que muda entre visitas: sem cortar,
+    # o mesmo imóvel virava duas linhas (32 duplicados achados em 30/09)
+    for c in cards:
+        if not c["href"] or not c["titulo"]:
+            continue
+        campos = _parse_card(c, cidade, uf)
+        if not campos["preco"]:
+            continue
+        cur.execute(
+            """INSERT INTO imoveis_mercado
+                (fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos,
+                 bairro, cidade, uf, url, titulo)
+               VALUES ('zapimoveis.com.br', 'portal', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (url) DO UPDATE SET
+                   preco=EXCLUDED.preco, area=EXCLUDED.area, preco_m2=EXCLUDED.preco_m2,
+                   quartos=EXCLUDED.quartos, coletado_em=NOW()""",
+            (finalidade, campos["tipo"], campos["preco"], campos["area"], campos["preco_m2"],
+             campos["quartos"], campos["bairro"], campos["cidade"], uf, c["href"].split("?")[0], c["titulo"]),
+        )
+        n += 1
+    return n
+
+
 def coletar_zap(conn, cidade_slug, uf, cidade=None, finalidade="venda", paginas=3, visivel=False):
     """cidade_slug é o formato da URL do Zap, ex: 'angra-dos-reis' (sem acento, com hífen)."""
     url_base = f"https://www.zapimoveis.com.br/{finalidade}/imoveis/{uf.lower()}+{cidade_slug}/"
@@ -113,31 +142,21 @@ def coletar_zap(conn, cidade_slug, uf, cidade=None, finalidade="venda", paginas=
                 page.goto(url, timeout=30000, wait_until="domcontentloaded")
                 page.wait_for_selector("a.olx-core-card", timeout=10000)
                 page.wait_for_timeout(1000)
+                rolar(page, f"Zap {cidade_slug} · {finalidade} · página {pagina}")
             except Exception as e:
-                print(f"[zap] falha ao abrir {url}: {e}")
+                espelhar(page, "Zap recusou a página")
+                # O Zap (Cloudflare) bloqueia a 2ª página feita por robô. É proposital
+                # do site: não contornamos. Para ir além da 1ª página, use a coleta
+                # manual (coleta_manual.py / painel de Automações) — você navega.
+                bloqueio = "Cloudflare" in (page.title() or "") or "blocked" in (page.content()[:3000] or "")
+                print(f"[zap] {'bloqueado pelo Zap (anti-robô) em' if bloqueio else 'falha ao abrir'} {url}"
+                      + ("" if bloqueio else f": {e}"))
                 break
             cards = _extrair_cards(page)
             if not cards:
                 print(f"[zap] página {pagina}: sem cards, parando")
                 break
-            for c in cards:
-                if not c["href"] or not c["titulo"]:
-                    continue
-                campos = _parse_card(c, cidade, uf)
-                if not campos["preco"]:
-                    continue
-                cur.execute(
-                    """INSERT INTO imoveis_mercado
-                        (fonte, origem, finalidade, tipo, preco, area, preco_m2, quartos,
-                         bairro, cidade, uf, url, titulo)
-                       VALUES ('zapimoveis.com.br', 'portal', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (url) DO UPDATE SET
-                           preco=EXCLUDED.preco, area=EXCLUDED.area, preco_m2=EXCLUDED.preco_m2,
-                           quartos=EXCLUDED.quartos, coletado_em=NOW()""",
-                    (finalidade, campos["tipo"], campos["preco"], campos["area"], campos["preco_m2"],
-                     campos["quartos"], campos["bairro"], campos["cidade"], uf, c["href"], c["titulo"]),
-                )
-                gravados += 1
+            gravados += gravar_cards_zap(cur, cards, finalidade, uf, cidade)
             conn.commit()
             print(f"[zap] {cidade_slug}/{finalidade} página {pagina}: {len(cards)} cards, {gravados} gravados até aqui")
             time.sleep(PAUSA_PAGINA)
