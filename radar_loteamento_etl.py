@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """
 Radar de Loteamentos — ranqueia municípios pra prospecção de loteamento cruzando:
-  • crescimento populacional (IBGE/SIDRA t6579, estimativas anuais)
+  • crescimento populacional entre os dois últimos Censos (IBGE/SIDRA: 2010 t202,
+    2022 t4709). NÃO misturar estimativa anual (t6579) de antes e depois de 2022:
+    as de 2011–2021 saíram da projeção do Censo 2010 e as de 2024+ do Censo 2022,
+    e a comparação inventava queda (Angra −14,8%; 50 dos 92 municípios do RJ).
   • receita per capita (score_municipios, já coletado via SICONFI)
   • investimento público em infraestrutura (licitacoes, filtro por objeto)
 
 Score 0-100 por percentil: 50% crescimento + 25% infra per capita + 25% receita pc.
 Uso:
-  python3 radar_loteamento_etl.py --importar [--ano-ini 2021] [--ano-fim 2024]
+  python3 radar_loteamento_etl.py --importar            # Censo 2010 → Censo 2022
+  (--ano-ini/--ano-fim aceitam 2010 e 2022, anos de Censo; outro ano usa a
+   estimativa t6579, e os dois anos precisam ser da mesma base)
 """
 import argparse, os, sys, time
 import requests
 import psycopg2
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/pncp_db")
-SIDRA = "https://apisidra.ibge.gov.br/values/t/6579/n6/all/v/9324/p/{ano}"
+SIDRA = "https://apisidra.ibge.gov.br/values/t/6579/n6/all/v/9324/p/{ano}"   # estimativas anuais
+SIDRA_CENSO = {
+    2010: "https://apisidra.ibge.gov.br/values/t/202/n6/all/v/93/p/2010",   # Censo 2010, população residente
+    2022: "https://apisidra.ibge.gov.br/values/t/4709/n6/all/v/93/p/2022",  # Censo 2022, população residente
+}
 TIMEOUT_SEC = 120
 
 # Palavras de objeto que indicam obra de infraestrutura urbana (sinal de expansão)
@@ -29,7 +38,7 @@ def populacao_por_ano(ano: int) -> dict[str, tuple[str, str, int]]:
     """{ibge: (nome, uf, populacao)} — 1 chamada bulk pro SIDRA."""
     for tentativa in range(4):
         try:
-            r = requests.get(SIDRA.format(ano=ano), timeout=TIMEOUT_SEC)
+            r = requests.get(SIDRA_CENSO.get(ano) or SIDRA.format(ano=ano), timeout=TIMEOUT_SEC)
             r.raise_for_status()
             break
         except requests.RequestException as e:
@@ -41,7 +50,9 @@ def populacao_por_ano(ano: int) -> dict[str, tuple[str, str, int]]:
     out = {}
     for row in r.json()[1:]:  # linha 0 é cabeçalho
         ibge = row["D1C"]
-        nome_uf = row["D1N"]  # "Angra dos Reis - RJ"
+        nome_uf = row["D1N"]  # "Angra dos Reis - RJ" (Censo 2022: "Angra dos Reis (RJ)")
+        if nome_uf.endswith(")") and " (" in nome_uf:
+            nome_uf = nome_uf[:-1].replace(" (", " - ")
         nome, _, uf = nome_uf.rpartition(" - ")
         try:
             pop = int(row["V"])
@@ -52,6 +63,9 @@ def populacao_por_ano(ano: int) -> dict[str, tuple[str, str, int]]:
 
 
 def importar(ano_ini: int, ano_fim: int):
+    censo = set(SIDRA_CENSO)
+    if (ano_ini in censo) != (ano_fim in censo) or (ano_ini not in censo and (ano_ini < 2022) != (ano_fim < 2022)):
+        raise SystemExit(f"❌ {ano_ini} e {ano_fim} são de bases diferentes (Censo × estimativa, ou antes × depois do Censo 2022)")
     print(f"[RADAR LOTEAMENTO] população {ano_ini} e {ano_fim} via SIDRA…")
     pop_ini = populacao_por_ano(ano_ini)
     pop_fim = populacao_por_ano(ano_fim)
@@ -122,8 +136,8 @@ def importar(ano_ini: int, ano_fim: int):
 def main():
     parser = argparse.ArgumentParser(description="Radar de Loteamentos — IBGE + SICONFI + licitações")
     parser.add_argument("--importar", action="store_true")
-    parser.add_argument("--ano-ini", type=int, default=2021)
-    parser.add_argument("--ano-fim", type=int, default=2024)
+    parser.add_argument("--ano-ini", type=int, default=2010)
+    parser.add_argument("--ano-fim", type=int, default=2022)
     args = parser.parse_args()
     if not args.importar:
         parser.error("Especifique --importar")

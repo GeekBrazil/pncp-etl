@@ -20,7 +20,8 @@ FILA="contratos|7|python3 contratos_etl.py --dias 8
 leiloes_bancos|1|python3 leiloes_bancos_etl.py --importar
 leiloes_judiciais|1|python3 leiloes_judiciais_etl.py --importar --dias 3
 comex_ano|7|python3 comex_etl.py --importar --ano $ANO
-radar|30|python3 radar_loteamento_etl.py --importar --ano-fim $((ANO-1))
+radar|30|python3 radar_loteamento_etl.py --importar
+fipezap|7|python3 fipezap_etl.py --importar
 comex|30|python3 comex_etl.py --importar --ano $((ANO-1))
 uniao|30|python3 imoveis_uniao_etl.py --importar
 agro|365|python3 agro_etl.py --importar

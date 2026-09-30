@@ -1895,6 +1895,57 @@ async def leiloes_outros(fonte: str = None, uf: str = None, municipios: str = No
     return query(sql, p)
 
 
+# ─── Índice FipeZAP (fipezap_etl.py): preço anunciado do m², aluguel e
+#     rentabilidade, mês a mês, em ~56 cidades + o índice nacional ("Brasil").
+_FIPEZAP_COLS = """mes, venda_m2, venda_var_12m, aluguel_m2, aluguel_var_12m, rentabilidade_mes"""
+
+def _fipezap_serie(cidade: str, meses: int):
+    rows = query(f"""SELECT {_FIPEZAP_COLS} FROM fipezap WHERE cidade = %s
+                     ORDER BY mes DESC LIMIT %s""", (cidade, meses))
+    return list(reversed(rows))
+
+@app.get("/fipezap", dependencies=[Depends(verify_api_key_or_admin)])
+async def fipezap_resumo(meses: int = 37):
+    """Último mês de cada cidade + série do índice nacional (Painéis)."""
+    try:
+        cidades = query(f"""SELECT DISTINCT ON (cidade) cidade, uf, municipio_ibge, {_FIPEZAP_COLS}
+                            FROM fipezap WHERE cidade <> 'Brasil' AND venda_m2 IS NOT NULL
+                            ORDER BY cidade, mes DESC""")
+    except Exception:
+        return {"brasil": [], "cidades": []}
+    return {"brasil": _fipezap_serie("Brasil", min(meses, 240)), "cidades": cidades}
+
+@app.get("/fipezap/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def fipezap_municipio(ibge: str, meses: int = 37):
+    """Série da cidade. Se a FipeZap não cobre o município, devolve a cidade de
+    referência do mesmo estado (a mais populosa coberta, em geral a capital),
+    com propria=false — o site deixa claro que é referência, não a cidade."""
+    try:
+        alvo = query("SELECT cidade, uf, municipio_ibge FROM fipezap WHERE municipio_ibge = %s LIMIT 1", (ibge,))
+        propria = bool(alvo)
+        if not alvo:
+            uf = query("SELECT uf FROM radar_loteamento WHERE municipio_ibge = %s", (ibge,))
+            if not uf:
+                raise HTTPException(status_code=404, detail="Município desconhecido")
+            alvo = query("""SELECT DISTINCT f.cidade, f.uf, f.municipio_ibge FROM fipezap f
+                            LEFT JOIN radar_loteamento r ON r.municipio_ibge = f.municipio_ibge
+                            WHERE f.uf = %s ORDER BY 1 LIMIT 50""", (uf[0]["uf"],))
+            if alvo:
+                pops = {r["municipio_ibge"]: r["pop_final"] for r in query(
+                    "SELECT municipio_ibge, pop_final FROM radar_loteamento WHERE municipio_ibge = ANY(%s)",
+                    ([a["municipio_ibge"] for a in alvo if a["municipio_ibge"]],))}
+                alvo.sort(key=lambda a: -(pops.get(a["municipio_ibge"]) or 0))
+        brasil = _fipezap_serie("Brasil", 1)
+    except HTTPException:
+        raise
+    except Exception:
+        return {"cidade": None, "propria": False, "serie": [], "brasil": None}
+    if not alvo:
+        return {"cidade": None, "propria": False, "serie": [], "brasil": brasil[-1] if brasil else None}
+    a = alvo[0]
+    return {"cidade": a["cidade"], "uf": a["uf"], "municipio_ibge": a["municipio_ibge"], "propria": propria,
+            "serie": _fipezap_serie(a["cidade"], min(meses, 240)), "brasil": brasil[-1] if brasil else None}
+
 @app.get("/radar-loteamentos", dependencies=[Depends(verify_api_key_or_admin)])
 async def radar_loteamentos(uf: str = None, pop_min: int = None, pop_max: int = None, limit: int = 50):
     """Ranking de municípios pra prospecção de loteamento (tabela materializada
