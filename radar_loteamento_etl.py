@@ -96,7 +96,7 @@ def importar(ano_ini: int, ano_fim: int):
         print(f"  {n} municípios upsertados.")
         # município que não existia no ano inicial (criado depois do Censo 2010)
         # não tem crescimento comparável: zera em vez de manter número antigo
-        cur.execute("""UPDATE radar_loteamento SET crescimento_pct = NULL, pop_inicial = NULL,
+        cur.execute("""UPDATE radar_loteamento SET crescimento_pct = NULL, pop_inicial = NULL, score = NULL,
                               ano_inicial = %s, ano_final = %s, atualizado_em = NOW()
                        WHERE ano_inicial IS DISTINCT FROM %s OR ano_final IS DISTINCT FROM %s""",
                     (ano_ini, ano_fim, ano_ini, ano_fim))
