@@ -94,6 +94,14 @@ def importar(ano_ini: int, ano_fim: int):
             )
             n += 1
         print(f"  {n} municípios upsertados.")
+        # município que não existia no ano inicial (criado depois do Censo 2010)
+        # não tem crescimento comparável: zera em vez de manter número antigo
+        cur.execute("""UPDATE radar_loteamento SET crescimento_pct = NULL, pop_inicial = NULL,
+                              ano_inicial = %s, ano_final = %s, atualizado_em = NOW()
+                       WHERE ano_inicial IS DISTINCT FROM %s OR ano_final IS DISTINCT FROM %s""",
+                    (ano_ini, ano_fim, ano_ini, ano_fim))
+        if cur.rowcount:
+            print(f"  {cur.rowcount} município(s) sem população no ano inicial: crescimento zerado.")
 
         print("  agregando receita per capita (score_municipios)…")
         cur.execute("""

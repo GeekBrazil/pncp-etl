@@ -71,7 +71,7 @@ def log(m):
 def baixar() -> bytes:
     for t in range(4):
         try:
-            r = requests.get(URL, timeout=180, headers={"User-Agent": "Mozilla/5.0 (dados públicos; allancandido.com)"})
+            r = requests.get(URL, timeout=180, headers={"User-Agent": "Mozilla/5.0"})  # UA com texto extra leva 403 do Cloudflare da Fipe
             r.raise_for_status()
             return r.content
         except requests.RequestException as e:
