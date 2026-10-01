@@ -25,14 +25,16 @@ import psycopg2
 import psycopg2.extras
 from playwright.sync_api import sync_playwright
 
+from area_imovel import area_m2_do_texto
 from espelho import espelhar, rolar
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/pncp_db")
 PAUSA_PAGINA = float(os.environ.get("ZAP_PAUSA", "4.0"))
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
-TIPOS = ["apartamento", "cobertura", "casa", "lote/terreno", "terreno", "sítio", "chácara",
-         "loja", "sala", "galpão", "fazenda", "kitnet", "flat", "sobrado", "duplex"]
+# rurais primeiro: "Chácara com casa" é chácara, não casa
+TIPOS = ["fazenda", "sítio", "chácara", "apartamento", "cobertura", "casa", "lote/terreno", "terreno",
+         "loja", "sala", "galpão", "kitnet", "flat", "sobrado", "duplex"]
 
 
 def _tipo_do_titulo(titulo):
@@ -65,6 +67,10 @@ def _parse_card(c, cidade_default, uf):
     m = re.search(r"Tamanho do imóvel\s*\n?\s*([\d.]+)\s*m", texto)
     if m:
         area = float(m.group(1).replace(".", ""))
+    else:
+        # rural: o tamanho vem em ha/alqueire, no card ou no título
+        m = re.search(r"Tamanho do imóvel\s*\n?\s*([^\n]+)", texto)
+        area = area_m2_do_texto(m.group(1) if m else "", uf) or area_m2_do_texto(c["titulo"], uf)
     m = re.search(r"Quantidade de quartos\s*\n?\s*(\d+)", texto)
     if m:
         quartos = int(m.group(1))

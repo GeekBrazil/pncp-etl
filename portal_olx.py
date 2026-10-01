@@ -14,24 +14,29 @@ Uso:
     python3 portal_olx.py --regiao rio-de-janeiro-e-regiao --uf RJ --cidade "Rio de Janeiro"
     python3 portal_olx.py --regiao serra-angra-dos-reis-e-regiao --uf RJ --cidade "Angra dos Reis" \
         --finalidade aluguel --paginas 3
+    # cidade sem região conhecida: busca por texto no estado e guarda só os cards da cidade
+    python3 portal_olx.py --regiao busca:itapuranga --uf GO --cidade Itapuranga
 """
 import argparse
 import os
 import re
 import time
+import unicodedata
 
 import psycopg2
 import psycopg2.extras
 from playwright.sync_api import sync_playwright
 
+from area_imovel import area_m2_do_texto
 from espelho import espelhar, rolar
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgres://pncp:x@localhost:5433/pncp_db")
 PAUSA_PAGINA = float(os.environ.get("OLX_PAUSA", "3.0"))  # gentil entre páginas de listagem
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
-TIPOS = ["apartamento", "cobertura", "casa", "terreno", "área", "sítio", "chácara",
-         "loja", "sala", "galpão", "fazenda", "kitnet", "flat"]
+# rurais primeiro: "Chácara com casa" é chácara, não casa
+TIPOS = ["fazenda", "sítio", "chácara", "apartamento", "cobertura", "casa", "terreno", "área",
+         "loja", "sala", "galpão", "kitnet", "flat"]
 
 
 def _tipo_do_titulo(titulo):
@@ -45,6 +50,10 @@ def _num(txt):
         return None
     m = re.search(r"\d+", txt)
     return int(m.group(0)) if m else None
+
+
+def _sem_acento(t):
+    return unicodedata.normalize("NFD", t or "").encode("ascii", "ignore").decode().strip().lower()
 
 
 def _extrair_cards(page):
@@ -72,9 +81,11 @@ def _extrair_cards(page):
     )
 
 
-def gravar_cards_olx(cur, cards, finalidade, uf, cidade=None):
+def gravar_cards_olx(cur, cards, finalidade, uf, cidade=None, so_da_cidade=False):
     """Grava os cards de uma página da listagem OLX em imoveis_mercado. Usado pelo
-    robô (coletar_olx) e pela coleta manual (coleta_manual.py)."""
+    robô (coletar_olx) e pela coleta manual (coleta_manual.py).
+    `so_da_cidade`: na busca por texto vêm cards de cidades vizinhas (o termo
+    aparece na descrição); grava só os que o OLX localiza na própria cidade."""
     n = 0
     for c in cards:
         if not c["href"] or not c["preco_txt"]:
@@ -88,20 +99,23 @@ def gravar_cards_olx(cur, cards, finalidade, uf, cidade=None):
         partes = [x.strip() for x in loc.split(",") if x.strip()]
         cidade_card = partes[0] if partes else cidade
         bairro = partes[1] if len(partes) > 1 else None
+        if so_da_cidade and cidade and _sem_acento(cidade_card) != _sem_acento(cidade):
+            continue
         area = quartos = banheiros = None
         for d in c["details"] or []:
             if not d:
                 continue
             dl = d.lower()
-            if "metro" in dl:
-                area = _num(d)
+            if "metro" in dl or "hectare" in dl or "alqueire" in dl:
+                # area_m2_do_texto entende "48.400 metros quadrados" (o _num
+                # parava no ponto e lia 48) e área rural em ha/alqueire
+                area = area_m2_do_texto(d, uf) or _num(d)
             elif "quarto" in dl:
                 quartos = _num(d)
             elif "banheiro" in dl:
                 banheiros = _num(d)
-        if area is None:  # sem o detalhe, o título costuma trazer "210 m²"
-            mt = re.search(r"(\d[\d.]*)\s*m[²2]", c["titulo"] or "")
-            area = _num(mt.group(1).replace(".", "")) if mt else None
+        if area is None:  # sem o detalhe, o título costuma trazer "210 m²" ou "12 alqueires"
+            area = area_m2_do_texto(c["titulo"], uf)
         preco_m2 = round(preco / area, 2) if preco and area else None
         anunciante_tipo = "proprietario" if c["dono"] else None
         tipo = _tipo_do_titulo(c["titulo"] or "")
@@ -127,17 +141,27 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
     `visivel` abre uma janela de Chromium de verdade (headless=False) — pra
     ver rodando ao vivo, via painel de automações. Só funciona numa sessão
     com tela (DISPLAY setado); rodando via systemd/cron sem tela, ignora."""
-    url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}/{regiao}"
+    # "busca:<termo>": cidade fora das regiões que o OLX usa no caminho da URL
+    # (ou região ainda não conferida) — busca o termo no estado inteiro e
+    # gravar_cards_olx guarda só os cards localizados na cidade.
+    busca = regiao.split(":", 1)[1] if regiao.startswith("busca:") else None
+    if busca:
+        url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}?q={busca}"
+    else:
+        url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}/{regiao}"
     cur = conn.cursor()
     gravados = 0
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=not visivel)
         page = navegador.new_page(user_agent=UA)
         for pagina in range(1, paginas + 1):
-            qs = f"?o={pagina}" if pagina > 1 else ""
+            params = []
+            if pagina > 1:
+                params.append(f"o={pagina}")
             if sort_recente:
-                qs += "&sf=1" if qs else "?sf=1"
-            url = url_base + qs
+                params.append("sf=1")
+            sep = "&" if "?" in url_base else "?"
+            url = url_base + (sep + "&".join(params) if params else "")
             try:
                 page.goto(url, timeout=30000, wait_until="domcontentloaded")
                 # o preço renderiza depois do card em si — sem isso, a coleta perde
@@ -152,7 +176,7 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
             if not cards:
                 print(f"[olx] página {pagina}: sem cards, parando (região pode não existir ou fim da lista)")
                 break
-            gravados += gravar_cards_olx(cur, cards, finalidade, uf, cidade)
+            gravados += gravar_cards_olx(cur, cards, finalidade, uf, cidade, so_da_cidade=bool(busca))
             conn.commit()
             print(f"[olx] {regiao}/{finalidade} página {pagina}: {len(cards)} cards, {gravados} gravados até aqui")
             time.sleep(PAUSA_PAGINA)
@@ -162,7 +186,8 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--regiao", required=True, help="slug da região OLX, ex: serra-angra-dos-reis-e-regiao")
+    ap.add_argument("--regiao", required=True,
+                    help="slug da região OLX, ex: serra-angra-dos-reis-e-regiao; ou busca:<termo> (exige --cidade)")
     ap.add_argument("--uf", required=True)
     ap.add_argument("--cidade", default=None, help="fallback se o card não trouxer local")
     ap.add_argument("--finalidade", choices=["venda", "aluguel"], default="venda")

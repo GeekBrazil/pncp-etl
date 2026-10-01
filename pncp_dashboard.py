@@ -1581,6 +1581,101 @@ async def mercado_anuncios(cidade: str = None, bairro: str = None, tipo: str = N
     params.append(min(limit, 200))
     return query(sql, params)
 
+# ─── Busca de anúncios por cidade: dono direto e rural (allancandido.com/imoveis/busca)
+# Rural = sítio/chácara/fazenda ou qualquer anúncio a partir de 1 ha. A faixa de
+# R$/m² urbano (PRECO_M2_MIN) cortaria toda terra rural, então o rural tem a
+# própria faixa de plausibilidade, em R$/ha.
+from area_imovel import TIPOS_RURAIS, AREA_MIN_RURAL_M2, M2_POR_HA, m2_por_alqueire
+PRECO_HA_MIN, PRECO_HA_MAX = 500, 20_000_000
+BUSCA_AMOSTRA_MIN = 3  # cidade pequena: mediana a partir de 3 anúncios, sempre com a amostra ao lado
+_RURAL_SQL = f"(tipo IN ({', '.join(repr(t) for t in TIPOS_RURAIS)}) OR area >= {AREA_MIN_RURAL_M2})"
+_PRECO_HA_SQL = f"(preco / NULLIF(area, 0) * {M2_POR_HA})"
+
+@app.get("/mercado/cidades", dependencies=[Depends(verify_api_key_or_admin)])
+async def mercado_cidades():
+    """Todas as cidades com anúncio coletado na janela do mercado, com quantos
+    são direto com o dono e quantos são rurais (pro seletor da busca)."""
+    return query(f"""
+        SELECT max(cidade) AS cidade, uf, count(*) AS anuncios,
+               count(*) FILTER (WHERE anunciante_tipo = 'proprietario') AS dono_direto,
+               count(*) FILTER (WHERE {_RURAL_SQL}) AS rurais
+        FROM imoveis_mercado
+        WHERE cidade IS NOT NULL AND uf IS NOT NULL
+          AND coletado_em > NOW() - interval '{MERCADO_JANELA_DIAS} days'
+        GROUP BY unaccent(lower(cidade)), uf
+        ORDER BY count(*) DESC""")
+
+@app.get("/mercado/busca", dependencies=[Depends(verify_api_key_or_admin)])
+async def mercado_busca(cidade: str, uf: str = None, finalidade: str = "venda",
+                        dono: bool = False, rural: bool = False, tipo: str = None,
+                        ordem: str = "recente", limit: int = 60):
+    """Resumo + anúncios de uma cidade, filtráveis por dono direto e rural.
+    Rural vem com área em ha e R$/ha; o resumo traz R$/ha e R$/alqueire
+    (alqueire da UF: 4,84 ha; paulista 2,42 ha em SP/PR)."""
+    onde = ["unaccent(lower(cidade)) = unaccent(lower(%s))",
+            f"coletado_em > NOW() - interval '{MERCADO_JANELA_DIAS} days'"]
+    params = [cidade]
+    if uf:
+        onde.append("uf = %s"); params.append(uf.upper())
+    if finalidade in ("venda", "aluguel"):
+        onde.append("finalidade = %s"); params.append(finalidade)
+    base = " AND ".join(onde)
+
+    r = query(f"""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE anunciante_tipo = 'proprietario') AS dono_direto,
+               count(*) FILTER (WHERE {_RURAL_SQL}) AS rurais,
+               count(*) FILTER (WHERE {_RURAL_SQL} AND anunciante_tipo = 'proprietario') AS rurais_dono,
+               count(*) FILTER (WHERE NOT {_RURAL_SQL} AND preco_m2 BETWEEN %s AND %s) AS amostra_m2,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY preco_m2)
+                   FILTER (WHERE NOT {_RURAL_SQL} AND preco_m2 BETWEEN %s AND %s) AS preco_m2_mediano,
+               count(*) FILTER (WHERE {_RURAL_SQL} AND {_PRECO_HA_SQL} BETWEEN %s AND %s) AS amostra_ha,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY {_PRECO_HA_SQL})
+                   FILTER (WHERE {_RURAL_SQL} AND {_PRECO_HA_SQL} BETWEEN %s AND %s) AS preco_ha_mediano,
+               max(uf) AS uf, max(cidade) AS cidade, max(coletado_em) AS atualizado_em
+        FROM imoveis_mercado WHERE {base}""",
+        [PRECO_M2_MIN, PRECO_M2_MAX, PRECO_M2_MIN, PRECO_M2_MAX,
+         PRECO_HA_MIN, PRECO_HA_MAX, PRECO_HA_MIN, PRECO_HA_MAX, *params])[0]
+    alq = m2_por_alqueire(r["uf"] or uf)
+    if r["amostra_m2"] < BUSCA_AMOSTRA_MIN:
+        r["preco_m2_mediano"] = None
+    if r["amostra_ha"] < BUSCA_AMOSTRA_MIN or r["preco_ha_mediano"] is None:
+        r["preco_ha_mediano"] = None
+        r["preco_alqueire_mediano"] = None
+    else:
+        r["preco_ha_mediano"] = round(float(r["preco_ha_mediano"]))
+        r["preco_alqueire_mediano"] = round(r["preco_ha_mediano"] * alq / M2_POR_HA)
+    if r["preco_m2_mediano"] is not None:
+        r["preco_m2_mediano"] = round(float(r["preco_m2_mediano"]))
+    r["alqueire_m2"] = alq
+
+    filtros = [base]
+    fparams = list(params)
+    if dono:
+        filtros.append("anunciante_tipo = 'proprietario'")
+    if rural:
+        filtros.append(_RURAL_SQL)
+    if tipo:
+        filtros.append("tipo = %s"); fparams.append(tipo)
+    ordens = {"recente": "coletado_em DESC",
+              "preco": "preco ASC NULLS LAST",
+              "preco_ha": f"{_PRECO_HA_SQL} ASC NULLS LAST"}
+    anuncios = query(f"""
+        SELECT id, fonte, titulo, tipo, finalidade, preco, area, preco_m2, quartos,
+               bairro, cidade, uf, url, anunciante_tipo, coletado_em,
+               {_RURAL_SQL} AS rural,
+               CASE WHEN {_RURAL_SQL} AND area > 0 THEN round((area / {M2_POR_HA})::numeric, 2) END AS area_ha,
+               CASE WHEN {_RURAL_SQL} AND {_PRECO_HA_SQL} BETWEEN %s AND %s
+                    THEN round({_PRECO_HA_SQL}::numeric) END AS preco_ha
+        FROM imoveis_mercado
+        WHERE {" AND ".join(filtros)} AND preco IS NOT NULL
+        ORDER BY {ordens.get(ordem, ordens["recente"])} LIMIT %s""",
+        [PRECO_HA_MIN, PRECO_HA_MAX, *fparams, min(limit, 200)])
+    tipos = [t["tipo"] for t in query(
+        f"SELECT tipo, count(*) n FROM imoveis_mercado WHERE {base} AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC",
+        params)]
+    return {"resumo": r, "tipos": tipos, "anuncios": anuncios}
+
 @app.get("/imobiliarias/diretorio", dependencies=[Depends(verify_api_key_or_admin)])
 async def imobiliarias_diretorio(cidade: str = None):
     """Imobiliárias com site monitorado + quantos anúncios ativos de cada uma."""

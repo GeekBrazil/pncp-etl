@@ -11,3 +11,8 @@ RJ|Paraty|serra-angra-dos-reis-e-regiao/parati|paraty
 RJ|Mangaratiba|rio-de-janeiro-e-regiao/mangaratiba|mangaratiba
 RJ|Rio das Ostras|norte-do-estado-do-rio/rio-das-ostras|rio-das-ostras
 RJ|Araruama|norte-do-estado-do-rio/araruama|araruama
+# Goiás (Vale do São Patrício): região do OLX ainda não conferida — "busca:<termo>"
+# procura o nome no estado e grava só os cards localizados na própria cidade.
+# Slug do Zap segue o padrão uf+cidade; se a 1ª rodada vier vazia, conferir a URL.
+GO|Itapuranga|busca:itapuranga|itapuranga
+GO|Uruana|busca:uruana|uruana
