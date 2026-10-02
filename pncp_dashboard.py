@@ -1632,10 +1632,15 @@ async def mercado_busca(cidade: str, uf: str = None, finalidade: str = "venda",
                count(*) FILTER (WHERE {_RURAL_SQL} AND {_PRECO_HA_SQL} BETWEEN %s AND %s) AS amostra_ha,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY {_PRECO_HA_SQL})
                    FILTER (WHERE {_RURAL_SQL} AND {_PRECO_HA_SQL} BETWEEN %s AND %s) AS preco_ha_mediano,
-               max(uf) AS uf, max(cidade) AS cidade, max(coletado_em) AS atualizado_em
+               max(uf) AS uf, max(cidade) AS cidade, max(coletado_em) AS atualizado_em,
+               (SELECT r.municipio_ibge FROM radar_loteamento r
+                 WHERE unaccent(lower(r.municipio_nome)) = unaccent(lower(%s))
+                   AND (%s::text IS NULL OR r.uf = %s::text)
+                 ORDER BY r.pop_final DESC NULLS LAST LIMIT 1) AS ibge
         FROM imoveis_mercado WHERE {base}""",
         [PRECO_M2_MIN, PRECO_M2_MAX, PRECO_M2_MIN, PRECO_M2_MAX,
-         PRECO_HA_MIN, PRECO_HA_MAX, PRECO_HA_MIN, PRECO_HA_MAX, *params])[0]
+         PRECO_HA_MIN, PRECO_HA_MAX, PRECO_HA_MIN, PRECO_HA_MAX,
+         cidade, uf.upper() if uf else None, uf.upper() if uf else None, *params])[0]
     alq = m2_por_alqueire(r["uf"] or uf)
     if r["amostra_m2"] < BUSCA_AMOSTRA_MIN:
         r["preco_m2_mediano"] = None
@@ -1675,6 +1680,27 @@ async def mercado_busca(cidade: str, uf: str = None, finalidade: str = "venda",
         f"SELECT tipo, count(*) n FROM imoveis_mercado WHERE {base} AND tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC",
         params)]
     return {"resumo": r, "tipos": tipos, "anuncios": anuncios}
+
+# ─── Regularidade rural do município (CAR/SICAR + contorno IBGE) ─────────────
+@app.get("/rural/car/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def rural_car(ibge: str, force: bool = False):
+    """Imóveis do CAR somados por município: situação, análise, tipo e porte
+    em módulos fiscais. Cache de 30 dias (car_rural.py)."""
+    from car_rural import regularidade_municipio
+    r = await asyncio.to_thread(regularidade_municipio, ibge, force)
+    if r is None:
+        raise HTTPException(status_code=404, detail="Código IBGE inválido ou CAR indisponível agora.")
+    return r
+
+@app.get("/rural/malha/{ibge}", dependencies=[Depends(verify_api_key_or_admin)])
+async def rural_malha(ibge: str):
+    """Contorno do município (GeoJSON do IBGE), buscado pelo servidor porque a
+    CSP do site não deixa o navegador chamar o IBGE. Cache de 30 dias."""
+    from car_rural import malha_municipio
+    r = await asyncio.to_thread(malha_municipio, ibge)
+    if r is None:
+        raise HTTPException(status_code=404, detail="Código IBGE inválido ou IBGE indisponível agora.")
+    return r
 
 @app.get("/imobiliarias/diretorio", dependencies=[Depends(verify_api_key_or_admin)])
 async def imobiliarias_diretorio(cidade: str = None):
