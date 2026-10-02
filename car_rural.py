@@ -16,11 +16,13 @@ do próprio SICAR direto no navegador.
 """
 import json
 import os
+import ssl
 from datetime import datetime, timezone
 
 import psycopg2
 import psycopg2.extras
 import requests
+from requests.adapters import HTTPAdapter
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/pncp_db")
 WFS = "https://geoserver.car.gov.br/geoserver/sicar/wfs"
@@ -29,6 +31,21 @@ CACHE_DIAS = 30
 PAGINA = 5000
 TIMEOUT = 90
 HEADERS = {"User-Agent": "allancandido.com (dados abertos)"}
+
+
+class _CifraRsa(HTTPAdapter):
+    """O GeoServer do SICAR só fala TLS 1.2 com troca de chave RSA (AES256-GCM-SHA384),
+    que o Python tira da lista padrão: sem isto, handshake failure no container.
+    O certificado continua sendo verificado; só essa cifra entra a mais."""
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.set_ciphers("DEFAULT:AES256-GCM-SHA384")
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_sessao_car = requests.Session()
+_sessao_car.mount("https://geoserver.car.gov.br", _CifraRsa())
 
 # 2 primeiros dígitos do código IBGE → UF
 UF_POR_CODIGO = {
@@ -83,7 +100,7 @@ def _imoveis_car(ibge, uf):
     props = "cod_imovel,status_imovel,area,condicao,tipo_imovel,m_fiscal,municipio"
     out, inicio = [], 0
     while True:
-        r = requests.get(WFS, headers=HEADERS, timeout=TIMEOUT, params={
+        r = _sessao_car.get(WFS, headers=HEADERS, timeout=TIMEOUT, params={
             "service": "WFS", "version": "2.0.0", "request": "GetFeature",
             "typeNames": f"sicar:sicar_imoveis_{uf.lower()}", "outputFormat": "application/json",
             "propertyName": props, "CQL_FILTER": f"cod_municipio_ibge={ibge}",
