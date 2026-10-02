@@ -17,9 +17,12 @@ PAGINAS="${PAGINAS:-3}"
 while IFS='|' read -r uf cidade regiao_olx slug_zap; do
     [[ "$uf" =~ ^#.*$ || -z "$uf" ]] && continue
     for finalidade in venda aluguel; do
-        echo "=== OLX $cidade ($finalidade) ==="
-        python3 portal_olx.py --regiao "$regiao_olx" --uf "$uf" --cidade "$cidade" --finalidade "$finalidade" --paginas "$PAGINAS" || echo "[aviso] OLX $cidade/$finalidade falhou, seguindo"
+        echo "=== OLX ${cidade:-$uf inteiro} ($finalidade) ==="
+        args_cidade=(); [ -n "$cidade" ] && args_cidade=(--cidade "$cidade")
+        python3 portal_olx.py --regiao "$regiao_olx" --uf "$uf" "${args_cidade[@]}" --finalidade "$finalidade" --paginas "$PAGINAS" || echo "[aviso] OLX ${cidade:-$uf}/$finalidade falhou, seguindo"
         sleep "$PAUSA_ENTRE_RODADAS"
+        # "-" no slug do Zap: linha só de OLX (o Zap não tem busca pelo estado inteiro)
+        [ "$slug_zap" = "-" ] && continue
         echo "=== Zap $cidade ($finalidade) ==="
         python3 portal_zap.py --cidade-slug "$slug_zap" --uf "$uf" --cidade "$cidade" --finalidade "$finalidade" --paginas "$PAGINAS" || echo "[aviso] Zap $cidade/$finalidade falhou, seguindo"
         sleep "$PAUSA_ENTRE_RODADAS"

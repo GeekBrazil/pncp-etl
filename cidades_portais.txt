@@ -1,5 +1,8 @@
 # Cidades que o coletor de portais (OLX + Zap) varre a cada rodada.
 # Formato: uf|cidade_bonita|regiao_olx|cidade_slug_zap
+# regiao_olx "estado" (cidade vazia, Zap "-"): OLX do estado inteiro, cada anúncio
+# na cidade do card — pega as cidades pequenas sem listar uma a uma.
+# regiao_olx "busca:<nome>": cidade sem região OLX conferida (busca no estado).
 # regiao_olx: o "bairro de região" que o OLX usa (ver URL ao navegar manualmente).
 # cidade_slug_zap: o pedaço depois de "uf+" na URL do Zap (zapimoveis.com.br/venda/imoveis/rj+<slug>/).
 # Região OLX sem a cidade no fim ("serra-angra-dos-reis-e-regiao") devolve a região
@@ -16,3 +19,21 @@ RJ|Araruama|norte-do-estado-do-rio/araruama|araruama
 # Slug do Zap segue o padrão uf+cidade; se a 1ª rodada vier vazia, conferir a URL.
 GO|Itapuranga|busca:itapuranga|itapuranga
 GO|Uruana|busca:uruana|uruana
+# Bahia, Ceará e Mato Grosso do Sul: estado inteiro no OLX + cidades maiores
+# (e Prado) também no Zap. Slugs do Zap no padrão uf+cidade; conferir se vier vazio.
+BA||estado|-
+BA|Salvador|busca:salvador|salvador
+BA|Feira de Santana|busca:feira de santana|feira-de-santana
+BA|Vitória da Conquista|busca:vitoria da conquista|vitoria-da-conquista
+BA|Porto Seguro|busca:porto seguro|porto-seguro
+BA|Prado|busca:prado|prado
+CE||estado|-
+CE|Fortaleza|busca:fortaleza|fortaleza
+CE|Caucaia|busca:caucaia|caucaia
+CE|Juazeiro do Norte|busca:juazeiro do norte|juazeiro-do-norte
+CE|Sobral|busca:sobral|sobral
+MS||estado|-
+MS|Campo Grande|busca:campo grande|campo-grande
+MS|Dourados|busca:dourados|dourados
+MS|Três Lagoas|busca:tres lagoas|tres-lagoas
+MS|Corumbá|busca:corumba|corumba

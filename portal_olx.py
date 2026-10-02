@@ -22,6 +22,7 @@ import os
 import re
 import time
 import unicodedata
+from urllib.parse import quote
 
 import psycopg2
 import psycopg2.extras
@@ -144,9 +145,13 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
     # "busca:<termo>": cidade fora das regiões que o OLX usa no caminho da URL
     # (ou região ainda não conferida) — busca o termo no estado inteiro e
     # gravar_cards_olx guarda só os cards localizados na cidade.
+    # "estado": o estado inteiro, cada anúncio gravado na cidade do próprio card
+    # (mais recentes primeiro) — cobre cidade pequena sem precisar listá-la.
     busca = regiao.split(":", 1)[1] if regiao.startswith("busca:") else None
     if busca:
-        url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}?q={busca}"
+        url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}?q={quote(busca)}"
+    elif regiao == "estado":
+        url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}"
     else:
         url_base = f"https://www.olx.com.br/imoveis/{finalidade}/estado-{uf.lower()}/{regiao}"
     cur = conn.cursor()
@@ -187,7 +192,7 @@ def coletar_olx(conn, regiao, uf, cidade=None, finalidade="venda", paginas=3, so
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--regiao", required=True,
-                    help="slug da região OLX, ex: serra-angra-dos-reis-e-regiao; ou busca:<termo> (exige --cidade)")
+                    help="slug da região OLX, ex: serra-angra-dos-reis-e-regiao; busca:<termo> (exige --cidade) ou estado")
     ap.add_argument("--uf", required=True)
     ap.add_argument("--cidade", default=None, help="fallback se o card não trouxer local")
     ap.add_argument("--finalidade", choices=["venda", "aluguel"], default="venda")

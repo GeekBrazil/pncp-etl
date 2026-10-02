@@ -1648,6 +1648,14 @@ async def mercado_busca(cidade: str, uf: str = None, finalidade: str = "venda",
     if r["preco_m2_mediano"] is not None:
         r["preco_m2_mediano"] = round(float(r["preco_m2_mediano"]))
     r["alqueire_m2"] = alq
+    # código IBGE da cidade (o site usa para a tendência FipeZAP); nome sem acento + UF
+    try:
+        m = query("""SELECT municipio_ibge FROM score_municipios
+                     WHERE unaccent(lower(municipio_nome)) = unaccent(lower(%s)) AND uf = %s LIMIT 1""",
+                  (r["cidade"] or cidade, (r["uf"] or uf or "").upper()))
+        r["ibge"] = m[0]["municipio_ibge"] if m else None
+    except Exception:
+        r["ibge"] = None
 
     filtros = [base]
     fparams = list(params)
